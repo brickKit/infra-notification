@@ -19,12 +19,13 @@
     {
       "subject": "infra.notification.dispatch.im.v1",
       "grade": "core",
-      "note": "决定要走 IM 通道发一条消息时发。aggregate_id 是 record_id。channel:im 族的全部适配器都订阅这一条 subject，各自判断 target_adapters 里有没有自己（设计计划 §4）。",
+      "note": "决定要走 IM 通道发一条消息时发。aggregate_id 是 record_id，Event.Version 必须等于 attempt（同一个 record_id 的初次派发与之后每一次重试派发共用这一个 subject+aggregate_id，event_inbox 按 version 严格递增去重，重试时如果 version 不比上一次大会被适配器的 event_inbox 当成重复消息静默吞掉——这是实现时真的踩出来过的 bug，见 infra-notification consumer.go publishIMDispatchTx 的注释）。channel:im 族的全部适配器都订阅这一条 subject，各自判断 target_adapters 里有没有自己（设计计划 §4）。",
       "payload": {
         "type": "object",
-        "required": ["record_id", "target_adapters", "recipient_phone", "body"],
+        "required": ["record_id", "attempt", "target_adapters", "recipient_phone", "body"],
         "properties": {
           "record_id":        { "type": "string" },
+          "attempt":          { "type": "integer", "description": "第几次尝试，初次派发是 1，第一次重试是 2，以此类推——同 Event.Version。适配器发结果事件时应该把它带回去（result 事件的 attempt 字段），方便自己给同一个 record_id 的多次结果事件也算出严格递增的 version" },
           "target_adapters":  { "type": "array", "items": { "type": "string" }, "description": "如 [\"dingtalk\"]——本次派发点名要哪些适配器处理" },
           "recipient_phone":  { "type": "string", "description": "收件人手机号——稳定自然标识，各适配器自己翻译成本平台 id（设计计划 §1.1）" },
           "title":            { "type": "string" },
@@ -35,12 +36,13 @@
     {
       "subject": "infra.notification.dispatch.email.v1",
       "grade": "core",
-      "note": "走邮件通道时发。阶段三没有邮件适配器实现，先在事件清单占位（设计计划 §4）。",
+      "note": "走邮件通道时发。阶段三没有邮件适配器实现，先在事件清单占位（设计计划 §4）。attempt 字段的用法同 dispatch.im.v1。",
       "payload": {
         "type": "object",
-        "required": ["record_id", "target_adapters", "recipient_email", "body"],
+        "required": ["record_id", "attempt", "target_adapters", "recipient_email", "body"],
         "properties": {
           "record_id":        { "type": "string" },
+          "attempt":          { "type": "integer" },
           "target_adapters":  { "type": "array", "items": { "type": "string" } },
           "recipient_email":  { "type": "string" },
           "title":            { "type": "string" },

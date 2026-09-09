@@ -144,7 +144,7 @@ func workflowTaskCreatedHandler(schema string, targetAdapters []string, logger *
 					}
 					continue
 				}
-				if err := publishIMDispatchTx(tx, schema, recordID, targetAdapters, contact.Phone, p.Title, body); err != nil {
+				if err := publishIMDispatchTx(tx, schema, recordID, 1, targetAdapters, contact.Phone, p.Title, body); err != nil {
 					return err
 				}
 			case repo.ChannelEmail:
@@ -158,7 +158,7 @@ func workflowTaskCreatedHandler(schema string, targetAdapters []string, logger *
 					}
 					continue
 				}
-				if err := publishEmailDispatchTx(tx, schema, recordID, targetAdapters, contact.Email, p.Title, body); err != nil {
+				if err := publishEmailDispatchTx(tx, schema, recordID, 1, targetAdapters, contact.Email, p.Title, body); err != nil {
 					return err
 				}
 			default:
@@ -169,9 +169,23 @@ func workflowTaskCreatedHandler(schema string, targetAdapters []string, logger *
 	}
 }
 
-func publishIMDispatchTx(tx *sql.Tx, schema string, recordID int64, targetAdapters []string, phone, title, body string) error {
+// publishIMDispatchTx/publishEmailDispatchTx 的 attempt 参数必须是这条
+// record_id 第几次尝试（初次派发是 1，第一次重试是 2，以此类推），并且
+// 原样当 Event.Version 用。
+//
+// ⚠️ 这不是"顺手记一下第几次"——dispatch.im.v1 的 aggregate_id 固定是
+// record_id，同一个 record_id 的初次派发与之后每一次重试派发都共用
+// 这一个 subject+aggregate_id。event_inbox 的去重规则是"同一
+// (subject, aggregate_id) 只接受版本严格递增的事件，version 不比已见过
+// 的最大值大就静默跳过"（be-sdk-go events.go 的 handleOne）——如果重试
+// 时仍然用 Version:1，adapter 那侧的 event_inbox 会认为这是"已经处理过
+// 的重复消息"直接吞掉，症状是"重试次数在 notification_records 里涨了，
+// 钉钉那边却什么都没收到"，而且没有任何报错。这是写第一版时踩出来的
+// 真实 bug，趁 integration-im-dingtalk 还没建、这条契约还没被依赖方
+// 用起来的时候改，不留到装完两个组件联调才发现。
+func publishIMDispatchTx(tx *sql.Tx, schema string, recordID int64, attempt int, targetAdapters []string, phone, title, body string) error {
 	payload, err := json.Marshal(map[string]any{
-		"record_id": repo.RecordIDString(recordID), "target_adapters": targetAdapters,
+		"record_id": repo.RecordIDString(recordID), "attempt": attempt, "target_adapters": targetAdapters,
 		"recipient_phone": phone, "title": title, "body": body,
 	})
 	if err != nil {
@@ -179,13 +193,13 @@ func publishIMDispatchTx(tx *sql.Tx, schema string, recordID int64, targetAdapte
 	}
 	return besdk.PublishOutbox(tx, schema, besdk.Event{
 		Subject: "infra.notification.dispatch.im.v1", AggregateID: repo.RecordIDString(recordID),
-		Version: 1, Payload: payload,
+		Version: int64(attempt), Payload: payload,
 	})
 }
 
-func publishEmailDispatchTx(tx *sql.Tx, schema string, recordID int64, targetAdapters []string, email, title, body string) error {
+func publishEmailDispatchTx(tx *sql.Tx, schema string, recordID int64, attempt int, targetAdapters []string, email, title, body string) error {
 	payload, err := json.Marshal(map[string]any{
-		"record_id": repo.RecordIDString(recordID), "target_adapters": targetAdapters,
+		"record_id": repo.RecordIDString(recordID), "attempt": attempt, "target_adapters": targetAdapters,
 		"recipient_email": email, "title": title, "body": body,
 	})
 	if err != nil {
@@ -193,7 +207,7 @@ func publishEmailDispatchTx(tx *sql.Tx, schema string, recordID int64, targetAda
 	}
 	return besdk.PublishOutbox(tx, schema, besdk.Event{
 		Subject: "infra.notification.dispatch.email.v1", AggregateID: repo.RecordIDString(recordID),
-		Version: 1, Payload: payload,
+		Version: int64(attempt), Payload: payload,
 	})
 }
 
@@ -327,7 +341,11 @@ func handleRetryableFailureTx(ctx context.Context, tx *sql.Tx, schema string, re
 	if contact.Phone == "" {
 		return repo.MarkFailedPermanentTx(ctx, tx, recordID, "重试时收件人手机号为空，无法投递")
 	}
-	return publishIMDispatchTx(tx, schema, recordID, targetAdapters, contact.Phone, rec.Title, rec.Body)
+	// attempt = retry_count + 1：初次派发是 attempt 1（retry_count 当时是
+	// 0），第一次重试时 newCount 已经被 MarkRetryingTx 加到 1，对应
+	// attempt 2，以此类推——同 publishIMDispatchTx 顶部注释里 event_inbox
+	// 严格递增 version 的要求。
+	return publishIMDispatchTx(tx, schema, recordID, int(newCount)+1, targetAdapters, contact.Phone, rec.Title, rec.Body)
 }
 
 func publishSentTx(tx *sql.Tx, schema, recordID string) error {

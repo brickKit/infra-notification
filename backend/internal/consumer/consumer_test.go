@@ -92,6 +92,31 @@ func outboxCount(t *testing.T, db *sql.DB, subject, aggregateID string) int {
 	return n
 }
 
+func outboxVersions(t *testing.T, db *sql.DB, subject, aggregateID string) []int64 {
+	t.Helper()
+	var versions []int64
+	err := besdk.WithTx(context.Background(), db, testRole, testSchema, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(context.Background(),
+			`SELECT version FROM event_outbox WHERE subject = $1 AND aggregate_id = $2 ORDER BY id`, subject, aggregateID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var v int64
+			if err := rows.Scan(&v); err != nil {
+				return err
+			}
+			versions = append(versions, v)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return versions
+}
+
 func getRecordByRecipient(t *testing.T, db *sql.DB, sub string) *repo.NotificationRecord {
 	t.Helper()
 	r := repo.New(db, testRole, testSchema)
@@ -280,6 +305,14 @@ func TestImResultHandler_CONFIRMED失败且retryable时重新派发(t *testing.T
 	}
 	recordIDStr := repo.RecordIDString(recordID)
 
+	// 模拟"初次派发已经发过"（attempt=1），这样才能验证重试重发时用的是
+	// attempt=2、Version=2，而不是重复 Version=1。
+	if err := besdk.WithTx(context.Background(), db, testRole, testSchema, func(tx *sql.Tx) error {
+		return publishIMDispatchTx(tx, testSchema, recordID, 1, []string{"dingtalk"}, "13700000000", "重试测试", "body-x")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	runConsumeFor(t, db, nc, "integration.im.result.v1",
 		imResultHandler(testSchema, []string{"dingtalk"}, slog.Default()),
 		func(nc *nats.Conn) {
@@ -294,7 +327,16 @@ func TestImResultHandler_CONFIRMED失败且retryable时重新派发(t *testing.T
 	if rec.Status != repo.StatusRetrying || rec.RetryCount != 1 {
 		t.Fatalf("期望 RETRYING + retry_count=1，实际 status=%q retry_count=%d", rec.Status, rec.RetryCount)
 	}
-	if outboxCount(t, db, "infra.notification.dispatch.im.v1", recordIDStr) != 1 {
-		t.Fatal("期望重新发一条 dispatch.im.v1 用于重试")
+	if outboxCount(t, db, "infra.notification.dispatch.im.v1", recordIDStr) != 2 {
+		t.Fatal("期望总共 2 条 dispatch.im.v1（初次 + 重试各一条）")
+	}
+
+	// ⭐ 回归断言：这是 publishIMDispatchTx 顶部注释记录的那个真实 bug——
+	// 重试重发如果仍然用 Version:1，adapter 那侧的 event_inbox 会把它当
+	// 重复消息静默吞掉（同 aggregate_id、version 不比已见过的最大值大）。
+	// 两条 dispatch 事件的 version 必须严格递增，不能都是 1。
+	versions := outboxVersions(t, db, "infra.notification.dispatch.im.v1", recordIDStr)
+	if len(versions) != 2 || versions[0] != 1 || versions[1] != 2 {
+		t.Fatalf("期望 version 序列 [1, 2]（严格递增，供 event_inbox 正确放行重试），实际 %v", versions)
 	}
 }
