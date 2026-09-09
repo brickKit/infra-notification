@@ -49,10 +49,19 @@ CREATE TABLE notification_records_2026_10_01 PARTITION OF notification_records
   FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
 CREATE TABLE notification_records_2026_11_01 PARTITION OF notification_records
   FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
--- 建分区要求执行者是父表 owner，迁移用管理凭据跑，建出来的分区默认
--- 属于那个账号；分区维护后台任务运行时用 infra_notification_rw
--- （SET LOCAL ROLE 切换）建未来的分区，两者不是同一身份，必须显式把
--- owner 转过去（同 erp-inventory 的既有教训）。
+-- 把父表 owner 转给 infra_notification_rw，让它以后能对分区表本身做
+-- DDL（比如归档时的 DETACH PARTITION）。
+--
+-- ⚠️ 这一步只转父表——PostgreSQL 的 ALTER TABLE ... OWNER TO 不会级联到
+-- 已存在的分区（真机验证过：这条语句跑完 notification_records_2026_09_01
+-- 等三个分区的 owner 仍是跑迁移的管理凭据，不是 infra_notification_rw）。
+-- 不需要因此再手动转一遍分区的 owner：这三个初始分区所在的 schema 已经
+-- 配好 ALTER DEFAULT PRIVILEGES（be-ops 建 schema 时配的），
+-- infra_notification_rw 对"别人建的新表"天然有 SELECT/INSERT/UPDATE/
+-- DELETE，DML 不看 owner。而 backend/internal/partition/monthly.go
+-- 的后台任务建未来分区时本身就是在 SET LOCAL ROLE infra_notification_rw
+-- 之下跑 CREATE TABLE，新分区的 owner 直接就是它自己（同样真机验证过），
+-- 两条路径都不需要显式 ALTER OWNER 分区本身。
 ALTER TABLE notification_records OWNER TO infra_notification_rw;
 
 -- notification_preferences：两层模型（设计计划 §2.1）——category = ''

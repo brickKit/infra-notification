@@ -51,6 +51,10 @@ configSchema:
     authzBundleUrl:                   # 权限判定的 bundle 轮询地址，指向 infra-authz
       type: string
       default: ""
+    imTargetAdapters:                 # 发 infra.notification.dispatch.im.v1 时点名哪些
+      type: string                    # channel:im 适配器处理，逗号分隔（设计计划 §4）。
+      default: dingtalk                # 本阶段只有 integration-im-dingtalk 一个成员——
+                                        # 装第二个 IM 适配器时改这一个字符串，不用改代码。
 
 deployment:
   type: container
