@@ -1,0 +1,41 @@
+id: infra/notification               # 必须与 component.yaml 一致，be-ops 校验
+version: 1.0.0
+
+asset:
+  source_type: open_standard
+  assembly_role: default
+  contract_lock: strict
+  customization_guide: |
+    多通道到达策略（全通道并发发 / 按优先级降级 / 用户单选主通道）是本
+    组件的第一个 Fork 点（设计计划 §8 结尾的分歧排查）——本阶段实现
+    "全通道并发发 + 用户可关某通道"，客户要别的到达策略需要改一段内部
+    路由逻辑，不是槽位。
+    metadata.id 与 version 一个字都不能改——改了所有依赖方的
+    INFRA_NOTIFICATION_ENDPOINT 会整个消失（虽然本阶段没有任何组件对
+    本组件建依赖边，见设计计划 §5）。
+
+domain: infra
+tier: backend
+
+edge_routes:
+  - { path: /infra/notification/**, auth: required }
+
+menus:
+  - { key: infra.notification, title: 我的通知, permission: infra.notification.view }
+
+data:
+  schema: infra_notification            # registry/schemas.tsv
+  role:   infra_notification_rw         # 只用于 SET LOCAL ROLE，从不登录，因此不进 brickkit.yaml
+
+# 一维（设计计划 §1）：通知历史只该本人看得见——内容里会出现单据标题、
+# 金额这类摘要，这一维不是可选的（导读第 22 条：省略 data_scopes 会被
+# be-ops 当场拦下）。
+data_scopes:
+  - { dimension: owner, column: recipient_sub, mode: equals, tables: [notification_records] }
+
+permissions:
+  - { key: infra.notification.view,             title: 查看我的通知,   type: page   }
+  - { key: infra.notification.preference.edit,  title: 编辑通知偏好,   type: action }
+  - { key: infra.notification.admin,            title: 通知排障视图,   type: page   }
+
+shell: go-infra                       # 合并部署时进外壳三（§13.2、设计计划身份证）

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "infra-notification 事件清单",
+  "note": "Schema 演进铁律：只增不删不改（决策 19）。消费者宽容反序列化。⚠️ target_adapters[] 字段是给'一个通道类型下有多个适配器'准备的（channel:im 族），NATS 核心是广播，每个跑着的适配器都会收到每一条 dispatch 事件，适配器自己判断 target_adapters 里有没有自己（设计计划 §4）。",
+  "envelope": {
+    "description": "所有事件共用的信封。三个 Header 字段由 be-sdk 自动填/校验（§3.10）",
+    "required": ["subject", "aggregate_id", "version", "trace_id", "causation_id", "hop_count", "occurred_at"],
+    "properties": {
+      "subject":      { "type": "string", "pattern": "^[a-z]+\\.[a-z-]+\\.[a-z-]+\\.v[0-9]+$" },
+      "aggregate_id": { "type": "string" },
+      "version":      { "type": "integer", "description": "消费者只在严格大于本地当前值时更新（决策 43）" },
+      "trace_id":     { "type": "string" },
+      "causation_id": { "type": "string" },
+      "hop_count":    { "type": "integer", "maximum": 5, "description": "> 5 直接丢弃进 DLQ（决策 42）" },
+      "occurred_at":  { "type": "string", "format": "date-time" }
+    }
+  },
+  "events": [
+    {
+      "subject": "infra.notification.dispatch.im.v1",
+      "grade": "core",
+      "note": "决定要走 IM 通道发一条消息时发。aggregate_id 是 record_id。channel:im 族的全部适配器都订阅这一条 subject，各自判断 target_adapters 里有没有自己（设计计划 §4）。",
+      "payload": {
+        "type": "object",
+        "required": ["record_id", "target_adapters", "recipient_phone", "body"],
+        "properties": {
+          "record_id":        { "type": "string" },
+          "target_adapters":  { "type": "array", "items": { "type": "string" }, "description": "如 [\"dingtalk\"]——本次派发点名要哪些适配器处理" },
+          "recipient_phone":  { "type": "string", "description": "收件人手机号——稳定自然标识，各适配器自己翻译成本平台 id（设计计划 §1.1）" },
+          "title":            { "type": "string" },
+          "body":             { "type": "string", "description": "渲染好的文本，适配器不再理解/加工内容" }
+        }
+      }
+    },
+    {
+      "subject": "infra.notification.dispatch.email.v1",
+      "grade": "core",
+      "note": "走邮件通道时发。阶段三没有邮件适配器实现，先在事件清单占位（设计计划 §4）。",
+      "payload": {
+        "type": "object",
+        "required": ["record_id", "target_adapters", "recipient_email", "body"],
+        "properties": {
+          "record_id":        { "type": "string" },
+          "target_adapters":  { "type": "array", "items": { "type": "string" } },
+          "recipient_email":  { "type": "string" },
+          "title":            { "type": "string" },
+          "body":             { "type": "string" }
+        }
+      }
+    },
+    {
+      "subject": "infra.notification.sent.v1",
+      "grade": "peripheral",
+      "note": "某条通知最终成功送达（收到适配器的 phase=CONFIRMED 且 success 时发）。供审计与监控，不驱动任何下游业务逻辑。",
+      "payload": {
+        "type": "object",
+        "required": ["record_id", "channel"],
+        "properties": {
+          "record_id": { "type": "string" },
+          "channel":   { "type": "string", "enum": ["IM", "EMAIL", "SMS"] }
+        }
+      }
+    },
+    {
+      "subject": "infra.notification.failed.v1",
+      "grade": "peripheral",
+      "note": "重试耗尽或适配器判定不可重试（retryable=false）时发。供审计与监控。",
+      "payload": {
+        "type": "object",
+        "required": ["record_id", "channel", "error"],
+        "properties": {
+          "record_id": { "type": "string" },
+          "channel":   { "type": "string", "enum": ["IM", "EMAIL", "SMS"] },
+          "error":     { "type": "string" }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+openapi: 3.0.3
+info:
+  title: infra-notification · 统一通知中心
+  version: 1.0.0
+  description: |
+    对外 REST 面，路径统一挂在 `/infra/notification/**` 前缀下（标准形状，
+    见总纲 §2.1）。
+
+    ⚠️ 没有"发通知"这类接口——本组件唯一入口是事件（设计计划 §3.1）。
+    人能碰到的只有"查自己的通知历史"与"改自己的通道偏好"两件事。
+
+paths:
+  /infra/notification/notifications:
+    get:
+      summary: 我的通知历史（站内信列表）
+      operationId: listNotifications
+      parameters:
+        - { name: category, in: query, schema: { type: string } }
+        - { name: status,   in: query, schema: { type: string, enum: [PENDING, ACCEPTED, SENT, FAILED_PERMANENT, SUPPRESSED, RETRYING] } }
+        - { name: cursor,    in: query, schema: { type: string } }
+        - { name: page_size, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecordListResponse" }
+
+  /infra/notification/preferences:
+    get:
+      summary: 我的通道偏好
+      operationId: getPreferences
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+    put:
+      summary: 更新我的通道偏好
+      description: |
+        ⚠️ critical 类别（如 workflow_task）不接受"全部通道清空"——这条
+        约束由服务端强制，不是前端隐藏几个复选框就够（设计计划 §2.1）。
+      operationId: setPreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PreferencesUpdate" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+        "400":
+          description: 试图清空一个 critical 类别的全部通道
+
+  /infra/notification/admin/records:
+    get:
+      summary: 排障：查某条通知为什么没发出去
+      operationId: adminListRecords
+      parameters:
+        - { name: recipient_sub, in: query, schema: { type: string } }
+        - { name: category,      in: query, schema: { type: string } }
+        - { name: status,        in: query, schema: { type: string, enum: [PENDING, ACCEPTED, SENT, FAILED_PERMANENT, SUPPRESSED, RETRYING] } }
+        - { name: cursor,    in: query, schema: { type: string } }
+        - { name: page_size, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecordListResponse" }
+
+components:
+  schemas:
+    NotificationRecord:
+      type: object
+      properties:
+        id: { type: string }
+        recipient_sub: { type: string }
+        category: { type: string }
+        channel: { type: string, enum: [IM, EMAIL, SMS] }
+        title: { type: string }
+        body: { type: string }
+        status: { type: string, enum: [PENDING, ACCEPTED, SENT, FAILED_PERMANENT, SUPPRESSED, RETRYING] }
+        external_task_id: { type: string }
+        source_component: { type: string }
+        source_aggregate: { type: string }
+        source_id: { type: string }
+        retry_count: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    RecordListResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationRecord" }
+        next_cursor: { type: string }
+
+    Preferences:
+      type: object
+      properties:
+        sub: { type: string }
+        global_channels:
+          type: array
+          items: { type: string, enum: [IM, EMAIL, SMS] }
+        category_channels:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string, enum: [IM, EMAIL, SMS] }
+          description: "分类名 -> 这个类别启用的通道，未出现的分类跟随全局"
+
+    PreferencesUpdate:
+      type: object
+      properties:
+        global_channels:
+          type: array
+          items: { type: string, enum: [IM, EMAIL, SMS] }
+        category_channels:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string, enum: [IM, EMAIL, SMS] }

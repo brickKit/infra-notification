@@ -1,0 +1,74 @@
+apiVersion: brickkit/v1
+kind: Component
+
+metadata:
+  id: infra/notification              # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
+  name: 统一通知中心
+  version: 1.0.0                      # 精确版本，不接受 ^ / ~ / latest
+  description: 接收业务组件的"通知意图"，按用户通道偏好并发路由给下层已装配的 channel_adapter——密钥管理、重试逻辑、通道偏好三件事统一在这里做（设计书 §6.7）
+  license: Apache-2.0
+  vendor: brickKit
+
+tags: [infra, notification, dispatch]
+
+artifacts:
+  - type: api-contract
+    format: protobuf
+    files:
+      - contracts/infra/notification/v1/notification.proto
+      - contracts/events/notification.events.json
+  - type: api-contract
+    format: openapi
+    files: [contracts/notification.openapi.yaml]
+  - type: metadata                    # ← assembly.yaml 靠这一条随组件分发（§3.5）
+    files: [assembly.yaml]
+
+# ⚠️ 零强依赖零弱依赖——本组件完全活在事件图上（设计计划 §5、§6）：
+# 不同步调任何人（联系方式走 infra-iam-casdoor 的事件快照，不建依赖边
+# ——对 slot:iam 建依赖边会当场废掉整个槽位机制），也刻意不提供 Notify
+# 这类同步 rpc（设计计划 §3.1：本组件可被裁，且 infra-workflow 反向
+# 同步调用是铁律三禁止的，走事件天然没有"缺失依赖"这个问题）。
+dependencies:
+  components: []
+  resources:
+    # ⚠️ engine 逐字参与匹配（设计书 §2.7.3.1）：这里写的词必须与
+    #    brickkit.yaml 的 resources[].engine 完全相同，平台不认别名。
+    - { kind: database, engine: postgresql }
+    - { kind: mq,       engine: nats }         # 消费 infra.workflow.task.created.v1 等，发 dispatch 事件
+
+configSchema:
+  type: object
+  properties:
+    pgSchema:                         # ⚠️ 不能叫 databaseSchema，DATABASE_ 是保留前缀
+      type: string
+      default: infra_notification
+    otelBaseUrl:                      # ⚠️ 不能叫 otelEndpoint，*_ENDPOINT 是保留后缀
+      type: string
+      default: ""                     # 空 → Blackhole Exporter，零成本（§7.5）
+    iamJwksUrl:                       # JWT 本地验签的公钥来源，指向 infra-iam-casdoor
+      type: string
+      default: ""
+    authzBundleUrl:                   # 权限判定的 bundle 轮询地址，指向 infra-authz
+      type: string
+      default: ""
+
+deployment:
+  type: container
+  image: brickenterprise/infra-notification:1.0.0
+  port: 8202                          # 端口册 registry/ports.tsv
+  extraPorts:
+    - { name: grpc, port: 9202 }      # → INFRA_NOTIFICATION_GRPC_ENDPOINT（值仍以 http:// 开头）
+  labels:                             # 平台只搬运，不解释键值。值必须是字符串
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8202"
+    prometheus.io/path: "/metrics"
+  resources:
+    requests: { cpu: "150m", memory: "192Mi" }
+
+migration:
+  command: ["./migrate", "up"]
+
+healthCheck:
+  type: http
+  path: /healthz                      # ⚠️ 只查本进程存活，严禁查库、查依赖组件（§12.3.6）
+  # startPeriodSeconds 不写：默认就是 60，Go 组件够用（§12.3.5）

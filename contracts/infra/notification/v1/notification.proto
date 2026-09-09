@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package infra.notification.v1;
+
+option go_package = "github.com/brickKit/infra-notification/gen/infra/notification/v1;notificationv1";
+
+import "google/protobuf/timestamp.proto";
+
+// NotificationService 是 infra-notification 的 gRPC 面（设计计划 §3）。
+//
+// ⚠️ 没有 Notify 这类同步发消息的 rpc——这是刻意的（设计计划 §3.1）：
+// 本组件可被裁，任何同步调用方都要建依赖边，而"通知发不出去"绝不该
+// 让业务动作失败；`infra-workflow` 又被 §6.6 铁律三禁止反向同步调用。
+// 唯一入口是事件：谁要通知，谁发自己的领域事件，本组件消费。
+service NotificationService {
+  // BatchGetRecords 是防 N+1 的唯一合法批量读方式（§3.8）。
+  rpc BatchGetRecords(BatchGetRecordsRequest) returns (BatchGetRecordsResponse);
+
+  // ListRecords 是"我的通知历史"，走 ScopeFilter（数据权限在 REST 面
+  // 从已验签的 JWT claims 推导，同 infra-workflow 的既有判据：gRPC 面
+  // 本项目目前没有任何组件转发/验证 JWT，这里同样不做数据权限过滤）。
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+
+  // GetPreferences/SetPreferences 是通道偏好的读写——两层模型（全局
+  // 通道开关 + 分类通道开关，设计计划 §2.1）。
+  rpc GetPreferences(GetPreferencesRequest) returns (Preferences);
+  rpc SetPreferences(SetPreferencesRequest) returns (SetPreferencesResponse);
+}
+
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  CHANNEL_IM = 1;    // 本阶段唯一有真实适配器的通道（integration-im-dingtalk）
+  CHANNEL_EMAIL = 2; // 阶段三无适配器，先占位（设计计划 §4 发布事件表）
+  CHANNEL_SMS = 3;
+}
+
+enum RecordStatus {
+  RECORD_STATUS_UNSPECIFIED = 0;
+  RECORD_STATUS_PENDING = 1;           // 已建记录，还没发 dispatch
+  RECORD_STATUS_ACCEPTED = 2;          // ⭐ 适配器已受理，不代表送达（设计计划 §2）
+  RECORD_STATUS_SENT = 3;              // 终态：适配器确认送达成功
+  RECORD_STATUS_FAILED_PERMANENT = 4;  // 终态：重试耗尽或适配器判定不可重试
+  RECORD_STATUS_SUPPRESSED = 5;        // 终态：被用户偏好挡掉（非 critical 类别）
+  RECORD_STATUS_RETRYING = 6;          // 活跃态：ACCEPTED 之后收到失败结果，等待重试
+}
+
+// NotificationRecord 是通知历史一行，读接口直接返回它本身（不额外包一层
+// XxxResponse——本项目契约的一贯风格）。
+message NotificationRecord {
+  string id = 1;
+  string recipient_sub = 2;
+  string category = 3;              // 如 "workflow_task"
+  Channel channel = 4;               // 这条记录实际用的通道
+  string title = 5;
+  string body = 6;                   // 渲染好的文本，发给适配器的原文
+  RecordStatus status = 7;
+  string external_task_id = 8;       // 适配器返回的任务 id（如钉钉 task_id，设计计划 §2）
+  // 来源四元组：这条通知是哪个业务组件的哪个事件触发的。
+  string source_component = 9;
+  string source_aggregate = 10;
+  string source_id = 11;
+  int32 retry_count = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message BatchGetRecordsRequest {
+  repeated string record_ids = 1;
+}
+
+message BatchGetRecordsResponse {
+  // 顺序与 record_ids 一致；查不到的 id 对应位置省略（同 batchGet 惯例）。
+  repeated NotificationRecord records = 1;
+}
+
+message ListRecordsRequest {
+  string category = 1;        // 未指定 = 不筛
+  RecordStatus status = 2;    // 未指定 = 不筛
+  // ⚠️ 禁止深 Offset，强制 Cursor Pagination（决策 53）。
+  string cursor = 3;
+  int32 page_size = 4;
+}
+
+message ListRecordsResponse {
+  repeated NotificationRecord records = 1;
+  string next_cursor = 2;
+}
+
+// ChannelSet 包一层 repeated Channel——proto3 的 map value 不能直接是
+// repeated 字段，只能是 message。
+message ChannelSet {
+  repeated Channel channels = 1;
+}
+
+// Preferences 是通道偏好本体（设计计划 §2.1 的两层模型）。
+message Preferences {
+  string sub = 1;
+  repeated Channel global_channels = 2;           // 全局通道开关——不在这里面的通道，任何类别都不发（critical 除外的兜底见 §2.1）
+  map<string, ChannelSet> category_channels = 3;  // 分类通道开关：category -> 这个类别启用的通道（未出现的分类 = 跟随全局）
+}
+
+message GetPreferencesRequest {
+  string sub = 1;
+}
+
+message SetPreferencesRequest {
+  string sub = 1;
+  repeated Channel global_channels = 2;
+  map<string, ChannelSet> category_channels = 3;
+}
+
+// SetPreferencesResponse 包一层——buf lint 的 STANDARD 规则不允许同一个
+// 消息类型被多个 rpc 当返回值用，GetPreferences 已经占了 Preferences
+// 这个"读接口直接返回聚合根本身"的名额（同 infra-workflow 的既有教训）。
+message SetPreferencesResponse {
+  Preferences preferences = 1;
+}
