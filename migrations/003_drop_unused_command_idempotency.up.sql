@@ -1,0 +1,13 @@
+-- 自我纠正（同 integration-im-dingtalk 那次一样的复核）：全项目搜过，
+-- command_idempotency 只用于"外部调用方提供 idempotency_key 的写命令
+-- RPC"（如 erp-inventory 的 Reserve、infra-workflow 的 CreateTask），
+-- 从来不用于事件消费路径。本组件的两个写入路径都不需要它：
+--   ① SetPreferences 是"设成这个值"的天然幂等操作（同 REST PUT 语义），
+--      重复调用得到同一个结果，proto 里从一开始就没给它设计
+--      idempotency_key 字段；
+--   ② CreateRecord（建通知记录）完全由事件消费触发
+--      （infra.workflow.task.created.v1 等），去重已经由 event_inbox
+--      （按 subject+aggregate_id+version）负责。
+-- 002 迁移建这张表时照抄了 erp-inventory 的模板，没有重新核对本组件
+-- 是否真的有对应场景——这里去掉，不是遗漏了什么，是多余的抽象。
+DROP TABLE IF EXISTS command_idempotency;
