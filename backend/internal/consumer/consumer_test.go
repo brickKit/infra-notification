@@ -58,6 +58,29 @@ func publishEvent(t *testing.T, nc *nats.Conn, subject, aggregateID string, vers
 	}
 }
 
+// testSubject 给消费者测试造一个测试私有的 subject，不直接用生产真实
+// subject。
+//
+// ⚠️ 实测踩坑（同 docs/dev/实测踩坑记录.md 类别 E 的 E1）：这几条测试
+// 原来直接订阅/发布到真实 subject（如 "integration.im.result.v1"），
+// 而同一台机器上 `brickkit up` 真实跑着的 `infra-notification`/
+// `infra-workflow`/`integration-im-dingtalk` 容器订阅的是**同一个**
+// subject——NATS 核心发布订阅对同一 subject 的多个订阅者是广播，两边
+// 都会收到测试发布的消息，谁先把 event_inbox 那一行 INSERT 成功谁就
+// 真正执行 handler，断言读到的可能是真实容器的产出，不是本地被测代码
+// 的产出（真实症状：同一条测试连续两次跑出不同的 retry_count）。
+//
+// 换一个测试私有的 subject 就能让真实容器完全收不到——它们只订阅生产
+// subject 字面量，不会去猜一个带随机后缀的名字。这个换法是安全的：
+// besdk.Consume 的 fn 只用 ev.Subject 拼错误信息（见 consumer.go 各
+// handler），不拿它做任何业务判断，换成任意字符串不影响被测逻辑本身。
+// 这条规避法只适用于"测试直接构造/发布事件"的消费者测试——验证"真的
+// 发到了生产 subject 上"这件事本身的测试（比如 crm-opportunity 的
+// TestMarkWon_...）必须用真实 subject，不适用这个换法。
+func testSubject(base string) string {
+	return fmt.Sprintf("test.%s.%d", base, time.Now().UnixNano())
+}
+
 // runConsumeFor 起一个 besdk.Consume goroutine，跑够 wait 时长后取消并
 // 等它退出——同 erp-finance consumer_test.go 的既有节奏（真订阅、真发布、
 // 真等待，不直接调 handler 函数）。
@@ -144,6 +167,7 @@ func TestWorkflowTaskCreatedHandler_建记录并发IM派发事件(t *testing.T) 
 
 	sub := fmt.Sprintf("consumer-sub-%d", time.Now().UnixNano())
 	taskID := fmt.Sprintf("consumer-task-%d", time.Now().UnixNano())
+	subj := testSubject("infra.workflow.task.created.v1")
 
 	// 先给这个 sub 一条联系方式快照，否则 IM 通道会因为手机号为空直接
 	// 转 FAILED_PERMANENT（见 workflowTaskCreatedHandler 对 contact.Phone
@@ -154,12 +178,12 @@ func TestWorkflowTaskCreatedHandler_建记录并发IM派发事件(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	runConsumeFor(t, db, nc, "infra.workflow.task.created.v1",
+	runConsumeFor(t, db, nc, subj,
 		workflowTaskCreatedHandler(testSchema, []string{"dingtalk"}, slog.Default()),
 		func(nc *nats.Conn) {
 			payload := fmt.Sprintf(`{"task_id":%q,"assignee_sub":%q,"title":"审批：测试单","type":"APPROVAL","source_component":"infra/workflow","source_aggregate":"workflow_task","source_id":%q}`,
 				taskID, sub, taskID)
-			publishEvent(t, nc, "infra.workflow.task.created.v1", taskID, 1, payload)
+			publishEvent(t, nc, subj, taskID, 1, payload)
 		})
 
 	rec := getRecordByRecipient(t, db, sub)
@@ -188,6 +212,7 @@ func TestWorkflowTaskCreatedHandler_停用用户覆盖critical兜底(t *testing.
 
 	sub := fmt.Sprintf("consumer-disabled-%d", time.Now().UnixNano())
 	taskID := fmt.Sprintf("consumer-task-%d", time.Now().UnixNano())
+	subj := testSubject("infra.workflow.task.created.v1")
 
 	if err := besdk.WithTx(context.Background(), db, testRole, testSchema, func(tx *sql.Tx) error {
 		if err := repo.UpsertContactTx(context.Background(), tx, sub, "李四", "", "13900000000", 1); err != nil {
@@ -198,12 +223,12 @@ func TestWorkflowTaskCreatedHandler_停用用户覆盖critical兜底(t *testing.
 		t.Fatal(err)
 	}
 
-	runConsumeFor(t, db, nc, "infra.workflow.task.created.v1",
+	runConsumeFor(t, db, nc, subj,
 		workflowTaskCreatedHandler(testSchema, []string{"dingtalk"}, slog.Default()),
 		func(nc *nats.Conn) {
 			payload := fmt.Sprintf(`{"task_id":%q,"assignee_sub":%q,"title":"审批：测试单2","type":"APPROVAL","source_component":"infra/workflow","source_aggregate":"workflow_task","source_id":%q}`,
 				taskID, sub, taskID)
-			publishEvent(t, nc, "infra.workflow.task.created.v1", taskID, 1, payload)
+			publishEvent(t, nc, subj, taskID, 1, payload)
 		})
 
 	rec := getRecordByRecipient(t, db, sub)
@@ -240,12 +265,13 @@ func TestImResultHandler_ACCEPTED然后CONFIRMED成功(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordIDStr := repo.RecordIDString(recordID)
+	subj := testSubject("integration.im.result.v1")
 
-	runConsumeFor(t, db, nc, "integration.im.result.v1",
+	runConsumeFor(t, db, nc, subj,
 		imResultHandler(testSchema, []string{"dingtalk"}, slog.Default()),
 		func(nc *nats.Conn) {
 			payload := fmt.Sprintf(`{"record_id":%q,"adapter":"dingtalk","phase":"ACCEPTED","external_task_id":"dt-task-1"}`, recordIDStr)
-			publishEvent(t, nc, "integration.im.result.v1", "accepted-"+recordIDStr, 1, payload)
+			publishEvent(t, nc, subj, "accepted-"+recordIDStr, 1, payload)
 		})
 	rec, err := r.GetRecord(context.Background(), recordIDStr)
 	if err != nil {
@@ -255,11 +281,11 @@ func TestImResultHandler_ACCEPTED然后CONFIRMED成功(t *testing.T) {
 		t.Fatalf("期望 ACCEPTED + external_task_id=dt-task-1，实际 status=%q external_task_id=%q", rec.Status, rec.ExternalTaskID)
 	}
 
-	runConsumeFor(t, db, nc, "integration.im.result.v1",
+	runConsumeFor(t, db, nc, subj,
 		imResultHandler(testSchema, []string{"dingtalk"}, slog.Default()),
 		func(nc *nats.Conn) {
 			payload := fmt.Sprintf(`{"record_id":%q,"adapter":"dingtalk","phase":"CONFIRMED","success":true}`, recordIDStr)
-			publishEvent(t, nc, "integration.im.result.v1", "confirmed-"+recordIDStr, 2, payload)
+			publishEvent(t, nc, subj, "confirmed-"+recordIDStr, 2, payload)
 		})
 	rec, err = r.GetRecord(context.Background(), recordIDStr)
 	if err != nil {
@@ -304,6 +330,7 @@ func TestImResultHandler_CONFIRMED失败且retryable时重新派发(t *testing.T
 		t.Fatal(err)
 	}
 	recordIDStr := repo.RecordIDString(recordID)
+	subj := testSubject("integration.im.result.v1")
 
 	// 模拟"初次派发已经发过"（attempt=1），这样才能验证重试重发时用的是
 	// attempt=2、Version=2，而不是重复 Version=1。
@@ -313,11 +340,11 @@ func TestImResultHandler_CONFIRMED失败且retryable时重新派发(t *testing.T
 		t.Fatal(err)
 	}
 
-	runConsumeFor(t, db, nc, "integration.im.result.v1",
+	runConsumeFor(t, db, nc, subj,
 		imResultHandler(testSchema, []string{"dingtalk"}, slog.Default()),
 		func(nc *nats.Conn) {
 			payload := fmt.Sprintf(`{"record_id":%q,"adapter":"dingtalk","phase":"CONFIRMED","success":false,"retryable":true,"error_code":"RATE_LIMITED"}`, recordIDStr)
-			publishEvent(t, nc, "integration.im.result.v1", "retry-"+recordIDStr, 1, payload)
+			publishEvent(t, nc, subj, "retry-"+recordIDStr, 1, payload)
 		})
 
 	rec, err := r.GetRecord(context.Background(), recordIDStr)
