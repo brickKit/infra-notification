@@ -4,7 +4,10 @@ kind: Component
 metadata:
   id: infra/notification              # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 统一通知中心
-  version: 1.0.0                      # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.1                      # 精确版本，不接受 ^ / ~ / latest
+    # v1.0.1：补数据权限边界测试（TestListMyRecords_别人的通知看不到）——
+    # be-acceptance@v0.3.5 新增 data-scope-test-scan 门禁发现本组件此前
+    # 零覆盖（总纲 SOP-W-8）。纯补测试，无行为/契约变更。
   description: 接收业务组件的"通知意图"，按用户通道偏好并发路由给下层已装配的 channel_adapter——密钥管理、重试逻辑、通道偏好三件事统一在这里做（设计书 §6.7）
   license: Apache-2.0
   vendor: brickKit
@@ -58,7 +61,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/infra-notification:1.0.0
+  image: brickenterprise/infra-notification:1.0.1
   port: 8202                          # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9202 }      # → INFRA_NOTIFICATION_GRPC_ENDPOINT（值仍以 http:// 开头）
