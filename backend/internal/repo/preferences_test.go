@@ -150,3 +150,47 @@ func TestGetPreferences_默认值(t *testing.T) {
 		t.Fatalf("期望没有任何分类覆盖，实际 %v", p.CategoryChannels)
 	}
 }
+
+// TestSetPreferences_没提交全局通道就跟随默认：PUT /preferences 的请求体
+// 只带 category_channels、不带 global_channels 时（JSON 里缺这个字段或
+// 写 null，解出来是 nil），全局层按"没设置过"处理——跟随默认 [IM]，与
+// "没提交的分类跟随全局"同一个口径。不能因为 nil 写进 NOT NULL 的
+// channels 列而让整个请求 500。
+func TestSetPreferences_没提交全局通道就跟随默认(t *testing.T) {
+	r := testRepo(t)
+	sub := uniqueID("sub")
+	ctx := context.Background()
+
+	if _, err := r.SetPreferences(ctx, sub, []string{ChannelEmail}, nil); err != nil {
+		t.Fatalf("先写一份显式的全局偏好失败: %v", err)
+	}
+	p, err := r.SetPreferences(ctx, sub, nil, map[string][]string{CategoryWorkflowTask: {ChannelIM}})
+	if err != nil {
+		t.Fatalf("没提交全局通道时期望成功，实际 %v", err)
+	}
+	if !reflect.DeepEqual(p.GlobalChannels, []string{ChannelIM}) {
+		t.Fatalf("没提交全局通道，期望恢复默认 [IM]（整份替换不残留上一次的 [EMAIL]），实际 %v", p.GlobalChannels)
+	}
+	if !reflect.DeepEqual(p.CategoryChannels[CategoryWorkflowTask], []string{ChannelIM}) {
+		t.Fatalf("分类层期望 [IM]，实际 %v", p.CategoryChannels)
+	}
+}
+
+// TestSetPreferences_分类值为null等于没提交：category_channels 里某个分类
+// 的值是 null（解出来是 nil），按"没提交这个分类"处理——跟随全局，不写
+// 这一行；critical 类别同理（没提交本来就允许，兜底由
+// ResolvePreferredChannelsTx 接住）。显式的空数组 [] 才是"清空"，
+// critical 类别的清空仍然拒绝（见 TestSetPreferences_critical类别不能清空全部通道）。
+func TestSetPreferences_分类值为null等于没提交(t *testing.T) {
+	r := testRepo(t)
+	sub := uniqueID("sub")
+
+	p, err := r.SetPreferences(context.Background(), sub, []string{ChannelIM},
+		map[string][]string{"daily_digest": nil, CategoryWorkflowTask: nil})
+	if err != nil {
+		t.Fatalf("分类值为 null 时期望成功，实际 %v", err)
+	}
+	if len(p.CategoryChannels) != 0 {
+		t.Fatalf("值为 null 的分类期望不落行（跟随全局），实际 %v", p.CategoryChannels)
+	}
+}

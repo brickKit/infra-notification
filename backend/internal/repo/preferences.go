@@ -150,9 +150,13 @@ func (r *Repo) GetPreferences(ctx context.Context, sub string) (*Preferences, er
 // /preferences 400 那一档的服务端强制，不是前端隐藏几个复选框就够
 // （设计计划 §2.1）。没提交某个 critical 类别（"跟随全局"）不受这条限制：
 // 即使全局也是空，ResolvePreferredChannelsTx 的兜底会接住。
+//
+// nil 与空数组是两回事：nil（REST 请求体里缺这个字段或写 null）是"没
+// 提交"——全局层不落行（跟随默认），分类层不落行（跟随全局）；空数组
+// 是"这一层全部关掉"。channels 列 NOT NULL，nil 写进去会让整个请求失败。
 func (r *Repo) SetPreferences(ctx context.Context, sub string, globalChannels []string, categoryChannels map[string][]string) (*Preferences, error) {
 	for cat, chans := range categoryChannels {
-		if IsCriticalCategory(cat) && len(chans) == 0 {
+		if IsCriticalCategory(cat) && chans != nil && len(chans) == 0 {
 			return nil, fmt.Errorf("%w: 分类 %q 是关键通知，不能清空全部通道", ErrInvalidArgument, cat)
 		}
 	}
@@ -160,12 +164,17 @@ func (r *Repo) SetPreferences(ctx context.Context, sub string, globalChannels []
 		if _, err := tx.ExecContext(ctx, `DELETE FROM notification_preferences WHERE sub = $1`, sub); err != nil {
 			return fmt.Errorf("清空旧偏好: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO notification_preferences (sub, category, channels) VALUES ($1, '', $2)`,
-			sub, globalChannels); err != nil {
-			return fmt.Errorf("写全局通道偏好: %w", err)
+		if globalChannels != nil {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO notification_preferences (sub, category, channels) VALUES ($1, '', $2)`,
+				sub, globalChannels); err != nil {
+				return fmt.Errorf("写全局通道偏好: %w", err)
+			}
 		}
 		for cat, chans := range categoryChannels {
+			if chans == nil {
+				continue
+			}
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO notification_preferences (sub, category, channels) VALUES ($1, $2, $3)`,
 				sub, cat, chans); err != nil {
