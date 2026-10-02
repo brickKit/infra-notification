@@ -14,8 +14,7 @@ data:
   role:   infra_notification_rw         # 登录角色，`PG_USER` 的值
 
 # 一维：通知历史只该本人看得见——内容里会出现单据标题、
-# 金额这类摘要，这一维不是可选的（导读第 22 条：省略 data_scopes 会被
-# be-ops 当场拦下）。
+# 金额这类摘要，这一维不是可选的。
 data_scopes:
   - { dimension: owner, column: recipient_sub, mode: equals, tables: [notification_records] }
 
