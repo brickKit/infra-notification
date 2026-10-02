@@ -1,7 +1,7 @@
 // Package http 是 infra-notification 的 REST 面（对外路径前缀
 // /infra/notification，与 assembly.yaml 的 edge_routes 一致）。⚠️ 没有
 // "发通知"这类接口——本组件唯一入口是事件（contracts/notification.openapi.yaml
-// 顶部的注释、设计计划 §3.1）。
+// 顶部的说明）。
 package http
 
 import (

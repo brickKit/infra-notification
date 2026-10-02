@@ -100,8 +100,8 @@ func scanRecordRows(rows *sql.Rows, r *NotificationRecord) error {
 
 // CreateRecordTx 在调用方已有的事务里插入一条通知记录，返回自增 id。
 // ⚠️ 只供事件消费者使用（besdk.Consume 给的 tx 里，不能再开
-// besdk.WithTx——那是另一个独立会话，同 erp-finance
-// PostSalesOrderEntryTx 顶部注释的既有判据）。
+// besdk.WithTx——那是另一个独立会话，消费事件的 inbox 去重与这次写入
+// 就不在同一个事务里了）。
 func CreateRecordTx(ctx context.Context, tx *sql.Tx, in CreateRecordInput, status string) (int64, error) {
 	var id int64
 	err := tx.QueryRowContext(ctx, `
@@ -133,9 +133,8 @@ func GetRecordTx(ctx context.Context, tx *sql.Tx, recordID int64) (*Notification
 	return &r, nil
 }
 
-// GetRecord 按 record_id 查详情——不做数据权限过滤（同 infra-workflow
-// GetTask 的既有判据：repo 层只管"这行存不存在"，调用方决定"该不该被
-// 这个人看见"）。
+// GetRecord 按 record_id 查详情——不做数据权限过滤（repo 层只管"这行存
+// 不存在"，调用方决定"该不该被这个人看见"）。
 func (r *Repo) GetRecord(ctx context.Context, recordID string) (*NotificationRecord, error) {
 	id, err := parseRecordID(recordID)
 	if err != nil {
@@ -154,7 +153,7 @@ func (r *Repo) GetRecord(ctx context.Context, recordID string) (*NotificationRec
 	return &rec, nil
 }
 
-// BatchGetRecords 是防 N+1 的唯一合法批量读方式（§3.8）。查不到的 id
+// BatchGetRecords 是给调用方防 N+1 的批量读。查不到的 id
 // 直接在结果里省略，不报错（同 batchGet 惯例）。
 func (r *Repo) BatchGetRecords(ctx context.Context, recordIDs []string) ([]*NotificationRecord, error) {
 	if len(recordIDs) == 0 {
@@ -262,7 +261,7 @@ func (r *Repo) ListRecords(ctx context.Context, in ListInput) ([]*NotificationRe
 }
 
 // ── 状态流转：PENDING → ACCEPTED → SENT/FAILED_PERMANENT/RETRYING，
-// 全部由消费 integration.im.result.v1 驱动（设计计划 §2、§4）。────────
+// 全部由消费 integration.im.result.v1 驱动。──────────────────────────
 
 // MarkAcceptedTx：适配器已受理（asyncsend_v2 返回了 task_id），不代表
 // 送达。⚠️ 只允许从 PENDING/RETRYING 转入——已经是终态的记录收到一条

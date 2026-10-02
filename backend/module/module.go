@@ -1,7 +1,7 @@
-// Package module 是 infra-notification 唯一的装配入口（全局约束 §K、
-// 设计书 §12.5.1、§13.3 铁律七）。单跑与合并走同一个 New 函数；模块只
-// 交回零件（handler、gRPC 注册函数、迁移、后台循环），谁去 Listen、
-// 谁开池、谁 init OTel、谁装信号处理器，全归调用方。
+// Package module 是 infra-notification 唯一的装配入口。单跑与合进外壳
+// 走同一个 New 函数；模块只交回零件（handler、gRPC 注册函数、后台循环），
+// 谁去 Listen、谁开池、谁 init OTel、谁装信号处理器，全归调用方——一个
+// 进程里可能同时跑着好几个模块，进程级的东西只能有一份。
 package module
 
 import (
@@ -20,15 +20,16 @@ import (
 	"github.com/brickKit/infra-notification/v2/backend/internal/service"
 )
 
-// New 构造 infra-notification 模块。签名一个字都不许改（§12.5.1）——62
-// 个组件都是这一个签名，外壳启动器与 be-ops 产出 4 都按它生成。
+// New 构造 infra-notification 模块。签名不许改：外壳的 Registry 按这个
+// 签名登记每个成员，单跑的 RunStandalone 也只认它。
 func New(ctx context.Context, rt *besdk.Runtime) (*besdk.Module, error) {
-	// ⚠️ 配置只从 rt.Config 来，模块里零 os.Getenv（§12.5.3、决策 110）。
+	// ⚠️ 配置只从 rt.Config 来，模块里零 os.Getenv：合进外壳后一个进程只有
+	// 一份环境变量，各成员的同名键会互相顶掉。
 	schema := rt.Config.StringOr("PG_SCHEMA", "infra_notification")
 	role := schema + "_rw"
 	targetAdapters := splitAdapters(rt.Config.StringOr("IM_TARGET_ADAPTERS", "dingtalk"))
 
-	// ⚠️ 池从 rt.DB 来，不许自己 sql.Open（§13.3 铁律二）。
+	// ⚠️ 池从 rt.DB 来，不许自己 sql.Open：外壳里各成员共用平台开好的池。
 	r := repo.New(rt.DB, role, schema)
 	svc := service.New(r, rt.Logger)
 
@@ -40,8 +41,8 @@ func New(ctx context.Context, rt *besdk.Runtime) (*besdk.Module, error) {
 	return &besdk.Module{
 		HTTPHandler: eng,
 
-		// ⚠️ gRPC 一个不省，而且由调用方在 extraPorts["grpc"] 上 Listen
-		// （§1.5 原则一）。
+		// ⚠️ gRPC 一个不省，而且由调用方在 extraPorts["grpc"] 上 Listen：
+		// component.yaml 声明了的端口必须真的在听。
 		RegisterGRPC: func(gs *grpc.Server) {
 			notificationv1.RegisterNotificationServiceServer(gs, grpcapi.New(svc))
 		},

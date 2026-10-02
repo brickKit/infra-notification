@@ -1,8 +1,7 @@
 // Package service 是 infra-notification 的业务规则层：入参校验 + 给
-// http/grpc 一个不依赖 repo 内部细节的稳定入口（同 infra-workflow 的
-// 既有判据）。数据权限的可见性/归属校验也在这一层做——本组件只有 owner
-// 一维（recipient_sub 等值），没有 infra-workflow 那种两维 OR/toggle 的
-// 复杂度。
+// http/grpc 一个不依赖 repo 内部细节的稳定入口。数据权限的可见性 / 归属
+// 校验也在这一层做——本组件只有 owner 一维（recipient_sub 等值），没有
+// 两维 OR / 视角切换的问题。
 package service
 
 import (
@@ -73,8 +72,8 @@ func validateChannels(channels []string) error {
 	return nil
 }
 
-// ── gRPC 面：组件间协议，本项目目前没有任何组件转发/验证 JWT，不做数据
-// 权限过滤（同 infra-workflow ListTasks/BatchGetTasks 的既有判据）──
+// ── gRPC 面：组件间协议，调用方是别的组件而不是某个用户（gRPC 上不转发
+// 用户 JWT），不做数据权限过滤 ──
 
 func (s *Service) BatchGetRecords(ctx context.Context, recordIDs []string) ([]*repo.NotificationRecord, error) {
 	return s.repo.BatchGetRecords(ctx, recordIDs)

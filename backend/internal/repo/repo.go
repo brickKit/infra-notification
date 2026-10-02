@@ -1,7 +1,6 @@
 // Package repo 是 infra-notification 的数据访问层：通知记录、通道偏好、
-// 收件人联系方式快照。三条铁律（设计计划 §6.6 同类判据）在这一层的体现
-// 是"零表连业务库"——本组件只存自己的三张表 + 标准 Outbox/Inbox，没有
-// 一处 join 或回查任何业务组件的 schema。
+// 收件人联系方式快照。本组件只存自己的三张表 + 标准 Outbox/Inbox，没有
+// 一处 join 或回查任何别的组件的 schema——别人的数据只经事件快照进来。
 package repo
 
 import (
@@ -10,8 +9,7 @@ import (
 	"fmt"
 )
 
-// ── 哨兵错误。grpc/http 两层通过 service.ToStatus 统一映射（同
-// infra-workflow/erp-finance 的既有判据）。────────────────────────────────
+// ── 哨兵错误。grpc/http 两层通过 service.ToStatus 统一映射。──────────
 
 var ErrNotFound = errors.New("not found")
 var ErrInvalidArgument = errors.New("参数不合法")

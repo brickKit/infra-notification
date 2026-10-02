@@ -6,7 +6,7 @@ import (
 )
 
 // Contact 是 user_contacts 的一行——infra-iam-casdoor 事件的快照（权威源
-// 在 Casdoor，本组件只持快照，设计计划 §2）。
+// 在 Casdoor，本组件只持快照，不同步调 iam）。
 type Contact struct {
 	Sub         string
 	Phone       string
@@ -35,8 +35,8 @@ func GetContactTx(ctx context.Context, tx *sql.Tx, sub string) (Contact, error) 
 }
 
 // UpsertContactTx 维护 created/updated 两个事件的快照——按 version
-// 单调比较，旧的丢弃（同 erp-finance UpsertCustomerCreditSnapshotTx 的
-// 既有判据：ON CONFLICT DO UPDATE ... WHERE 表.version < EXCLUDED.version）。
+// 单调比较，旧的丢弃（ON CONFLICT DO UPDATE ... WHERE 表.version <
+// EXCLUDED.version：乱序到达的旧事件不会覆盖新快照）。
 // ⚠️ 不touch disabled 列：一次资料更新不该把一个已停用的用户悄悄重新
 // 启用——disabled 只由 SetContactDisabledTx 管，两条写入路径职责分离。
 func UpsertContactTx(ctx context.Context, tx *sql.Tx, sub, displayName, email, phone string, version int64) error {
@@ -51,9 +51,8 @@ func UpsertContactTx(ctx context.Context, tx *sql.Tx, sub, displayName, email, p
 	return err
 }
 
-// SetContactDisabledTx 消费 infra.iam.user.disabled.v1——设计计划 §4
-// ⚠️ 明文要求必须消费：人走了还继续发审批通知，是本组件最容易出的、
-// 外部可见的错。只置 disabled，不动其余字段（同 UpsertContactTx 反向
+// SetContactDisabledTx 消费 infra.iam.user.disabled.v1——⚠️ 必须消费：
+// 人走了还继续发审批通知，是本组件最容易出的、外部可见的错。只置 disabled，不动其余字段（同 UpsertContactTx 反向
 // 的职责分离）。行不存在时也要能记下"这个人被停用了"，所以用 UPSERT
 // 而不是纯 UPDATE。
 func SetContactDisabledTx(ctx context.Context, tx *sql.Tx, sub string, version int64) error {

@@ -8,24 +8,23 @@ import (
 	besdk "github.com/brickKit/be-sdk-go"
 )
 
-// criticalCategories：设计计划 §2.1——critical 是"类别"的属性，不是
-// "通道"的属性。本阶段只有一个类别，"两者放一个组件里写"式地硬编码在
-// 这里；等真的出现第二个 critical 类别时再考虑要不要挪成配置（同 SOP-P
-// 判据：现在只有一条，配置化是提前抽象）。
+// criticalCategories：critical 是"类别"的属性，不是"通道"的属性。目前
+// 只有一个类别，硬编码在这里；真的出现第二个 critical 类别时再考虑要不要
+// 挪成配置（现在只有一条，配置化是提前抽象）。
 var criticalCategories = map[string]bool{
 	CategoryWorkflowTask: true,
 }
 
-// CategoryWorkflowTask 是本阶段唯一的通知来源类别（infra-workflow 的
-// 审批待办），设计计划 §2.1 表格里标记为 critical：用户能选走哪个通道，
-// 但不能选择一个都不走。
+// CategoryWorkflowTask 是目前唯一的通知来源类别（infra-workflow 的待办），
+// 标记为 critical：用户能选走哪个通道，但不能选择一个都不走——审批通知能
+// 被关掉，业务链路就断了，而系统看起来一切正常。
 const CategoryWorkflowTask = "workflow_task"
 
 func IsCriticalCategory(category string) bool { return criticalCategories[category] }
 
 // defaultGlobalChannels 是用户从未设置过任何偏好时的隐含全局开关。
-// ⚠️ 刻意只有 IM，不是 proto 里全部三个 Channel——EMAIL/SMS 本阶段没有
-// 真实适配器（设计计划 §4 事件表），默认把它们打开只会造出一堆永远停在
+// ⚠️ 刻意只有 IM，不是 proto 里全部三个 Channel——EMAIL/SMS 目前没有
+// 适配器，默认把它们打开只会造出一堆永远停在
 // PENDING、没有适配器会消费的死记录。用户可以自己在偏好里显式加上
 // EMAIL/SMS（那是他自己的选择，后果自负），但不该是平台的默认值。
 func defaultGlobalChannels() []string { return []string{ChannelIM} }
@@ -67,8 +66,8 @@ func intersect(a, ceiling []string) []string {
 	return out
 }
 
-// ResolvePreferredChannelsTx 是发通知时真正用的解析入口（设计计划
-// §2.1 两层模型 + critical 兜底）：
+// ResolvePreferredChannelsTx 是发通知时真正用的解析入口（两层模型 +
+// critical 兜底）：
 //  1. 全局层是天花板——没设置过就是 defaultGlobalChannels()；
 //  2. 分类层是子集——没设置过就"跟随全局"（proto Preferences.category_channels
 //     字段注释原文），设置过就与全局层取交集（不能靠分类层突破全局关闭）；
@@ -142,13 +141,12 @@ func (r *Repo) GetPreferences(ctx context.Context, sub string) (*Preferences, er
 	return p, nil
 }
 
-// SetPreferences 整份替换（同 REST PUT 语义，见 be-sdk-go v0.2.4 修复
-// 时顺带核对过的 command_idempotency 结论：这个写法天然幂等，重复提交
-// 同一份内容得到同一个结果，不需要 idempotency_key）。
+// SetPreferences 整份替换（同 REST PUT 语义：天然幂等，重复提交同一份
+// 内容得到同一个结果，不需要 idempotency_key）。
 //
 // ⚠️ critical 类别显式提交空数组会被拒绝——这是 openapi 契约里 PUT
-// /preferences 400 那一档的服务端强制，不是前端隐藏几个复选框就够
-// （设计计划 §2.1）。没提交某个 critical 类别（"跟随全局"）不受这条限制：
+// /preferences 400 那一档的服务端强制，不是前端隐藏几个复选框就够。
+// 没提交某个 critical 类别（"跟随全局"）不受这条限制：
 // 即使全局也是空，ResolvePreferredChannelsTx 的兜底会接住。
 //
 // nil 与空数组是两回事：nil（REST 请求体里缺这个字段或写 null）是"没

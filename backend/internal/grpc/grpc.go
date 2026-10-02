@@ -1,6 +1,5 @@
-// Package grpc 实现 infra.notification.v1.NotificationService——内部
-// gRPC 面（§2.1）。HTTP 与 gRPC 共用同一个 service.Service，业务逻辑
-// 只写一遍（同 infra-workflow/erp-inventory 的既有判据）。
+// Package grpc 实现 infra.notification.v1.NotificationService——组件间的
+// gRPC 面。HTTP 与 gRPC 共用同一个 service.Service，业务逻辑只写一遍。
 package grpc
 
 import (
@@ -65,8 +64,7 @@ func toProtoStatus(s string) notificationv1.RecordStatus {
 	case repo.StatusRetrying:
 		return notificationv1.RecordStatus_RECORD_STATUS_RETRYING
 	default:
-		// ⚠️ UNSPECIFIED 就是 NOT_FOUND 的信号，不是"忘了填"（同
-		// infra-workflow toProtoStatus 的既有判据）。
+		// ⚠️ UNSPECIFIED 表示库里的状态值不认识，不是"忘了填"。
 		return notificationv1.RecordStatus_RECORD_STATUS_UNSPECIFIED
 	}
 }
