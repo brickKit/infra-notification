@@ -54,7 +54,7 @@ func TestCreateRecordTx_基本创建与查询(t *testing.T) {
 }
 
 // TestRecordStatusMachine_ACCEPTED到SENT 验证状态机 PENDING → ACCEPTED →
-// SENT 的正向流转（设计计划 §2：不能从 PENDING 直接跳 SENT，中间必须
+// SENT 的正向流转（不能从 PENDING 直接跳 SENT：适配器受理不等于送达，中间必须
 // 经过 ACCEPTED——这里用状态转移函数本身的行为验证，不是靠事件消费）。
 func TestRecordStatusMachine_ACCEPTED到SENT(t *testing.T) {
 	r := testRepo(t)

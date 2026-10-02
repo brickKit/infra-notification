@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // §12.4：不用 lib/pq，驱动名注册为 "pgx"
+	_ "github.com/jackc/pgx/v5/stdlib" // 不用 lib/pq（栈锁定），驱动名注册为 "pgx"
 )
 
 func testDB(t *testing.T) *sql.DB {
@@ -30,7 +30,7 @@ func testRepo(t *testing.T) *Repo {
 }
 
 // uniqueID 给每个测试造一个独立的 sub/category 前缀，测试之间不共享行、
-// 互不干扰（同 infra-workflow/infra-authz repo_test.go 的既有判据）。
+// 互不干扰（测试库是共用的，跑过的行不清理）。
 var idSeq int64
 
 func uniqueID(prefix string) string {

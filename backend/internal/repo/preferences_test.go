@@ -33,7 +33,7 @@ func sorted(s []string) []string {
 
 // TestResolvePreferredChannelsTx_未设置偏好时默认只有IM 验证 defaultGlobalChannels
 // 的口径：从没设置过偏好的用户，任何类别都解析成 [IM]，不是 proto 里
-// 全部三个 Channel——EMAIL/SMS 本阶段没有真实适配器，默认打开只会造出
+// 全部三个 Channel——EMAIL/SMS 目前没有适配器，默认打开只会造出
 // 死记录（preferences.go defaultGlobalChannels 注释）。
 func TestResolvePreferredChannelsTx_未设置偏好时默认只有IM(t *testing.T) {
 	r := testRepo(t)
@@ -50,8 +50,8 @@ func TestResolvePreferredChannelsTx_未设置偏好时默认只有IM(t *testing.
 	}
 }
 
-// TestResolvePreferredChannelsTx_critical类别在全局全关时兜底 是设计计划
-// §2.1 的核心断言：critical 类别不可能被完全关闭，即使用户把全局通道
+// TestResolvePreferredChannelsTx_critical类别在全局全关时兜底 是两层偏好
+// 模型的核心断言：critical 类别不可能被完全关闭，即使用户把全局通道
 // 开关清空，workflow_task 仍然要解析出至少一个通道；而非 critical 类别
 // 在同样条件下真的会解析成空集（对照组，证明兜底只对 critical 生效，
 // 不是代码碰巧总返回非空）。
@@ -65,7 +65,7 @@ func TestResolvePreferredChannelsTx_critical类别在全局全关时兜底(t *te
 
 	critical := resolveInOwnTx(t, r, sub, CategoryWorkflowTask)
 	if len(critical) == 0 {
-		t.Fatal("critical 类别不该解析出空集——这是设计计划 §2.1 的硬约束")
+		t.Fatal("critical 类别不该解析出空集——critical 类别不可关闭")
 	}
 
 	nonCritical := resolveInOwnTx(t, r, sub, "some_noncritical_category")
@@ -75,7 +75,7 @@ func TestResolvePreferredChannelsTx_critical类别在全局全关时兜底(t *te
 }
 
 // TestResolvePreferredChannelsTx_分类层不能突破全局天花板 验证"全局覆盖
-// 分类"的优先级（设计计划 §2.1，借鉴 Novu 的口径）：即使分类层显式选了
+// 分类"的优先级（借鉴 Novu 的口径）：即使分类层显式选了
 // EMAIL，只要全局层没开 EMAIL，解析结果里就不该出现 EMAIL。
 func TestResolvePreferredChannelsTx_分类层不能突破全局天花板(t *testing.T) {
 	r := testRepo(t)
@@ -93,8 +93,8 @@ func TestResolvePreferredChannelsTx_分类层不能突破全局天花板(t *test
 }
 
 // TestSetPreferences_critical类别不能清空全部通道 是 openapi 契约里 PUT
-// /preferences 400 那一档的服务端强制（设计计划 §2.1，"critical 是类别
-// 的属性"落到写路径上的具体校验）。
+// /preferences 400 那一档的服务端强制（"critical 是类别的属性"落到写路径
+// 上的具体校验）。
 func TestSetPreferences_critical类别不能清空全部通道(t *testing.T) {
 	r := testRepo(t)
 	sub := uniqueID("sub")
@@ -106,8 +106,8 @@ func TestSetPreferences_critical类别不能清空全部通道(t *testing.T) {
 	}
 }
 
-// TestSetPreferences_整份替换 验证 PUT 的天然幂等语义（同 command_idempotency
-// 去掉时的既有结论：SetPreferences 是"设成这个值"，不是增量合并）——
+// TestSetPreferences_整份替换 验证 PUT 的天然幂等语义（SetPreferences 是
+// "设成这个值"，不是增量合并）——
 // 第二次调用如果没带第一次设置的某个分类，那个分类要恢复"跟随全局"，
 // 不能残留第一次的值。
 func TestSetPreferences_整份替换(t *testing.T) {

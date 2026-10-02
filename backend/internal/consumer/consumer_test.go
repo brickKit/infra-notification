@@ -45,8 +45,8 @@ func natsURLForTest(t *testing.T) string {
 }
 
 // publishEvent 的 aggregateID 必须每次调用都不同——event_inbox 按
-// (subject, aggregate_id, version) 做单调去重且持久化，同 erp-finance
-// consumer_test.go 顶部注释的既有教训。
+// (subject, aggregate_id, version) 做单调去重且持久化，测试数据库跑过
+// 一次的 aggregate_id 再发一遍会被当成重复消息跳过。
 func publishEvent(t *testing.T, nc *nats.Conn, subject, aggregateID string, version int64, payload string) {
 	t.Helper()
 	msg := &nats.Msg{Subject: subject, Data: []byte(payload), Header: nats.Header{}}
@@ -61,29 +61,28 @@ func publishEvent(t *testing.T, nc *nats.Conn, subject, aggregateID string, vers
 // testSubject 给消费者测试造一个测试私有的 subject，不直接用生产真实
 // subject。
 //
-// ⚠️ 实测踩坑（同 docs/dev/实测踩坑记录.md 类别 E 的 E1）：这几条测试
-// 原来直接订阅/发布到真实 subject（如 "integration.im.result.v1"），
-// 而同一台机器上 `brickkit up` 真实跑着的 `infra-notification`/
-// `infra-workflow`/`integration-im-dingtalk` 容器订阅的是**同一个**
-// subject——NATS 核心发布订阅对同一 subject 的多个订阅者是广播，两边
-// 都会收到测试发布的消息，谁先把 event_inbox 那一行 INSERT 成功谁就
-// 真正执行 handler，断言读到的可能是真实容器的产出，不是本地被测代码
-// 的产出（真实症状：同一条测试连续两次跑出不同的 retry_count）。
+// ⚠️ 用真实 subject（如 "integration.im.result.v1"）时，同一台机器上
+// `brickkit up` 跑着的 `infra-notification`/`infra-workflow`/
+// `integration-im-dingtalk` 容器订阅的是**同一个** subject——NATS 核心
+// 发布订阅对同一 subject 的多个订阅者是广播，两边都会收到测试发布的
+// 消息，谁先把 event_inbox 那一行 INSERT 成功谁就真正执行 handler，断言
+// 读到的可能是真实容器的产出，不是本地被测代码的产出（症状：同一条测试
+// 连续两次跑出不同的 retry_count）。
 //
 // 换一个测试私有的 subject 就能让真实容器完全收不到——它们只订阅生产
 // subject 字面量，不会去猜一个带随机后缀的名字。这个换法是安全的：
 // besdk.Consume 的 fn 只用 ev.Subject 拼错误信息（见 consumer.go 各
 // handler），不拿它做任何业务判断，换成任意字符串不影响被测逻辑本身。
 // 这条规避法只适用于"测试直接构造/发布事件"的消费者测试——验证"真的
-// 发到了生产 subject 上"这件事本身的测试（比如 crm-opportunity 的
-// TestMarkWon_...）必须用真实 subject，不适用这个换法。
+// 发到了生产 subject 上"这件事本身的测试必须用真实 subject，不适用这个
+// 换法。
 func testSubject(base string) string {
 	return fmt.Sprintf("test.%s.%d", base, time.Now().UnixNano())
 }
 
 // runConsumeFor 起一个 besdk.Consume goroutine，跑够 wait 时长后取消并
-// 等它退出——同 erp-finance consumer_test.go 的既有节奏（真订阅、真发布、
-// 真等待，不直接调 handler 函数）。
+// 等它退出——真订阅、真发布、真等待，不直接调 handler 函数（直接调测不到
+// inbox 去重与事务边界）。
 func runConsumeFor(t *testing.T, db *sql.DB, nc *nats.Conn, subject string,
 	handle func(context.Context, *sql.Tx, besdk.Event) error, publish func(*nats.Conn)) {
 	t.Helper()
@@ -153,7 +152,7 @@ func getRecordByRecipient(t *testing.T, db *sql.DB, sub string) *repo.Notificati
 	return records[0]
 }
 
-// TestWorkflowTaskCreatedHandler_建记录并发IM派发事件 是本阶段唯一通知
+// TestWorkflowTaskCreatedHandler_建记录并发IM派发事件 是目前唯一通知
 // 来源的端到端验证：真订阅 infra.workflow.task.created.v1、真发布、
 // 真等待，断言落一条 PENDING 记录 + 一条 dispatch.im.v1 outbox 事件，
 // target_adapters 用的是传进来的配置（不是硬编码）。
@@ -198,8 +197,8 @@ func TestWorkflowTaskCreatedHandler_建记录并发IM派发事件(t *testing.T) 
 	}
 }
 
-// TestWorkflowTaskCreatedHandler_停用用户覆盖critical兜底 验证设计计划
-// §4 明文要求的一条：user.disabled.v1 必须消费，停用用户即使类别是
+// TestWorkflowTaskCreatedHandler_停用用户覆盖critical兜底：user.disabled.v1
+// 必须消费，停用用户即使类别是
 // critical 也不该再收到通知——记录仍然要落一条 SUPPRESSED（排障可见），
 // 但不该发 dispatch 事件（没有 IM 消息真的发出去）。
 func TestWorkflowTaskCreatedHandler_停用用户覆盖critical兜底(t *testing.T) {
@@ -241,8 +240,7 @@ func TestWorkflowTaskCreatedHandler_停用用户覆盖critical兜底(t *testing.
 }
 
 // TestImResultHandler_ACCEPTED然后CONFIRMED成功 验证状态机 PENDING →
-// ACCEPTED → SENT，并且成功时发 infra.notification.sent.v1（设计计划
-// §2、§4）。
+// ACCEPTED → SENT，并且成功时发 infra.notification.sent.v1。
 func TestImResultHandler_ACCEPTED然后CONFIRMED成功(t *testing.T) {
 	db := testDB(t)
 	nc, err := nats.Connect(natsURLForTest(t))
