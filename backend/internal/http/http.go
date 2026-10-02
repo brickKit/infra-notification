@@ -20,7 +20,7 @@ import (
 func RegisterRoutes(eng *gin.Engine, svc *service.Service) {
 	g := eng.Group("/infra/notification")
 	besdk.GET(g, "/notifications", "infra.notification.view", listMyRecordsHandler(svc))
-	besdk.GET(g, "/preferences", "infra.notification.preference.edit", getPreferencesHandler(svc))
+	besdk.GET(g, "/preferences", "infra.notification.view", getPreferencesHandler(svc))
 	besdk.PUT(g, "/preferences", "infra.notification.preference.edit", setPreferencesHandler(svc))
 	besdk.GET(g, "/admin/records", "infra.notification.admin", listAdminRecordsHandler(svc))
 }
