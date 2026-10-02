@@ -3,10 +3,10 @@ info:
   title: infra-notification · 统一通知中心
   version: 1.0.0
   description: |
-    对外 REST 面，路径统一挂在 `/infra/notification/**` 前缀下（标准形状，
-    见总纲 §2.1）。
+    对外 REST 面，路径统一挂在 `/infra/notification/**` 前缀下。
 
-    ⚠️ 没有"发通知"这类接口——本组件唯一入口是事件（设计计划 §3.1）。
+    ⚠️ 没有"发通知"这类接口——本组件唯一入口是事件：同步接口会逼调用方
+    建依赖边，而"通知发不出去"不该让业务动作失败。
     人能碰到的只有"查自己的通知历史"与"改自己的通道偏好"两件事。
 
 paths:
@@ -40,7 +40,9 @@ paths:
       summary: 更新我的通道偏好
       description: |
         ⚠️ critical 类别（如 workflow_task）不接受"全部通道清空"——这条
-        约束由服务端强制，不是前端隐藏几个复选框就够（设计计划 §2.1）。
+        约束由服务端强制，不是前端隐藏几个复选框就够。请求体整份替换：
+        没提交（或为 null）的 global_channels 跟随默认 [IM]，没提交（或为
+        null）的分类跟随全局；显式的空数组才是"这一层全部关掉"。
       operationId: setPreferences
       requestBody:
         required: true
