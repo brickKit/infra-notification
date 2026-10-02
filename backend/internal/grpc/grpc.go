@@ -10,8 +10,8 @@ import (
 
 	notificationv1 "github.com/brickKit/infra-notification/gen/infra/notification/v1"
 
-	"github.com/brickKit/infra-notification/backend/internal/repo"
-	"github.com/brickKit/infra-notification/backend/internal/service"
+	"github.com/brickKit/infra-notification/v2/backend/internal/repo"
+	"github.com/brickKit/infra-notification/v2/backend/internal/service"
 )
 
 type server struct {

@@ -12,22 +12,21 @@ import (
 	notificationv1 "github.com/brickKit/infra-notification/gen/infra/notification/v1"
 	"google.golang.org/grpc"
 
-	"github.com/brickKit/infra-notification/backend/internal/consumer"
-	grpcapi "github.com/brickKit/infra-notification/backend/internal/grpc"
-	httpapi "github.com/brickKit/infra-notification/backend/internal/http"
-	"github.com/brickKit/infra-notification/backend/internal/partition"
-	"github.com/brickKit/infra-notification/backend/internal/repo"
-	"github.com/brickKit/infra-notification/backend/internal/service"
-	"github.com/brickKit/infra-notification/migrations"
+	"github.com/brickKit/infra-notification/v2/backend/internal/consumer"
+	grpcapi "github.com/brickKit/infra-notification/v2/backend/internal/grpc"
+	httpapi "github.com/brickKit/infra-notification/v2/backend/internal/http"
+	"github.com/brickKit/infra-notification/v2/backend/internal/partition"
+	"github.com/brickKit/infra-notification/v2/backend/internal/repo"
+	"github.com/brickKit/infra-notification/v2/backend/internal/service"
 )
 
 // New 构造 infra-notification 模块。签名一个字都不许改（§12.5.1）——62
 // 个组件都是这一个签名，外壳启动器与 be-ops 产出 4 都按它生成。
 func New(ctx context.Context, rt *besdk.Runtime) (*besdk.Module, error) {
 	// ⚠️ 配置只从 rt.Config 来，模块里零 os.Getenv（§12.5.3、决策 110）。
-	schema := rt.Config.StringOr("pgSchema", "infra_notification")
+	schema := rt.Config.StringOr("PG_SCHEMA", "infra_notification")
 	role := schema + "_rw"
-	targetAdapters := splitAdapters(rt.Config.StringOr("imTargetAdapters", "dingtalk"))
+	targetAdapters := splitAdapters(rt.Config.StringOr("IM_TARGET_ADAPTERS", "dingtalk"))
 
 	// ⚠️ 池从 rt.DB 来，不许自己 sql.Open（§13.3 铁律二）。
 	r := repo.New(rt.DB, role, schema)
@@ -46,8 +45,6 @@ func New(ctx context.Context, rt *besdk.Runtime) (*besdk.Module, error) {
 		RegisterGRPC: func(gs *grpc.Server) {
 			notificationv1.RegisterNotificationServiceServer(gs, grpcapi.New(svc))
 		},
-
-		Migrations: migrations.FS, // 合并态由外壳按拓扑顺序跑（§13.3 铁律五）
 
 		// 后台循环：Outbox 推送 + 周分区维护（event_outbox/event_inbox）+
 		// 月分区维护（notification_records）+ 消费四类事件。四个循环

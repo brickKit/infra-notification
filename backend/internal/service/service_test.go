@@ -17,7 +17,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	besdk "github.com/brickKit/be-sdk-go"
-	"github.com/brickKit/infra-notification/backend/internal/repo"
+	"github.com/brickKit/infra-notification/v2/backend/internal/repo"
 )
 
 func testDB(t *testing.T) *sql.DB {

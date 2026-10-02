@@ -14,7 +14,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/nats-io/nats.go"
 
-	"github.com/brickKit/infra-notification/backend/internal/repo"
+	"github.com/brickKit/infra-notification/v2/backend/internal/repo"
 )
 
 const (

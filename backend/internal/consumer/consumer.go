@@ -21,7 +21,7 @@ import (
 	besdk "github.com/brickKit/be-sdk-go"
 	"github.com/nats-io/nats.go"
 
-	"github.com/brickKit/infra-notification/backend/internal/repo"
+	"github.com/brickKit/infra-notification/v2/backend/internal/repo"
 )
 
 // maxRetries：phase=CONFIRMED 且 retryable=true 时最多重试这么多次才转

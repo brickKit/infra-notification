@@ -12,7 +12,7 @@ import (
 	"log/slog"
 
 	besdk "github.com/brickKit/be-sdk-go"
-	"github.com/brickKit/infra-notification/backend/internal/repo"
+	"github.com/brickKit/infra-notification/v2/backend/internal/repo"
 )
 
 var ErrInvalidArgument = errors.New("参数不合法")
