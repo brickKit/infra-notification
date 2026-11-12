@@ -1,6 +1,6 @@
 // Package intents takes the notification intents of the deployment's senders in (docs/design.md NT01, NT02, NT04):
 // the publisher check, the shape by the shared intent contract, the duplicate, the merge key's sequence and what a
-// newer one supersedes; the refused intents and their purge.
+// newer one supersedes; the refused intents (their purge is the delivery module's).
 package intents
 
 import (
@@ -24,29 +24,35 @@ import (
 // it; the interval job is the floor).
 const JobDeliverNow = "deliver-now"
 
-// Subs are the subscriptions the configuration makes (NT01): each sender's stream, its intents.
-func Subs(m *core.Base, handle func(*core.Base, context.Context, db.Tx, events.Received) error) []events.Sub {
+// Subs are the subscriptions the configuration makes (NT01): each sender's stream, its intents; the handler is told
+// whose stream it is.
+func Subs(m *core.Base, handle func(*core.Base, string, context.Context, db.Tx, events.Received) error) []events.Sub {
 	var out []events.Sub
 	for _, c := range m.Senders {
-		s := sources.Stream(c)
+		s, owner := sources.Stream(c), c
 		out = append(out, events.Sub{Name: "intents-" + strings.ReplaceAll(s, ".", "-"), Streams: []string{s},
-			Types:  []string{sources.Type(c)},
-			Handle: func(ctx context.Context, tx db.Tx, e events.Received) error { return handle(m, ctx, tx, e) }})
+			Types: []string{sources.Type(c)},
+			Handle: func(ctx context.Context, tx db.Tx, e events.Received) error {
+				return handle(m, owner, ctx, tx, e)
+			}})
 	}
 	return out
 }
 
-// OnEvent takes one intent of a subscribed sender in, in the consumer's transaction (NT02, NT04).
-func OnEvent(m *core.Base, ctx context.Context, tx db.Tx, e events.Received) error {
-	from := strings.TrimPrefix(e.Source, "urn:be:")
+// OnEvent takes one intent of a subscribed sender in, in the consumer's transaction (NT02, NT04). owner is the
+// component whose stream it came on: the bus lets only its service identity publish there, so it is the sender; the
+// envelope's source and the payload's sender are what the publisher wrote, and must both name it (P18.8).
+func OnEvent(m *core.Base, owner string, ctx context.Context, tx db.Tx, e events.Received) error {
+	from := owner
 	var in notify.Intent
 	parsed := json.Unmarshal(e.Data, &in) == nil
 	id := in.ID
 	if id == "" {
 		id = e.RecordID
 	}
-	a := Arrival{Kind: in.Kind, SenderIsSource: parsed && in.Sender == from, ShapeOK: parsed && shapeOK(e.Data),
-		Category: in.Category, ExpiresAfterOccurred: notify.ExpiresInTime(in)}
+	a := Arrival{Kind: in.Kind, ShapeOK: parsed && shapeOK(e.Data), Category: in.Category,
+		SenderIsSource: in.Sender == owner && e.Source == "urn:be:"+owner && e.Stream == sources.Stream(owner),
+		ExpiresAfterOccurred: notify.ExpiresInTime(in)}
 	if a.SenderIsSource && a.ShapeOK {
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM intent WHERE sender = $1 AND id = $2::uuid)`, from, in.ID).
 			Scan(&a.Seen); err != nil {
@@ -94,6 +100,12 @@ func OnEvent(m *core.Base, ctx context.Context, tx db.Tx, e events.Received) err
 	}
 	if m.RT.Work == nil {
 		return nil
+	}
+	// one delivery run queued is enough: a backlog of intents does not queue a run each
+	var queued bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM be_work_item WHERE job = $1 AND state = 'pending')`,
+		JobDeliverNow).Scan(&queued); err != nil || queued {
+		return err
 	}
 	_, err := m.RT.Work.Enqueue(ctx, tx, JobDeliverNow, struct{}{})
 	return err
@@ -162,8 +174,14 @@ func nullableSeq(in notify.Intent) *int64 {
 	return &in.CollapseSeq
 }
 
-// reject records a refused intent and its security record, delivering nothing (NT02).
+// reject records a refused intent and its security record, delivering nothing (NT02); the same intent redelivered is
+// recorded once.
 func reject(m *core.Base, ctx context.Context, tx db.Tx, from, intentID, reason string) error {
+	var seen bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rejected_intent WHERE sender = $1 AND intent_id = $2
+		AND reason = $3)`, from, intentID, reason).Scan(&seen); err != nil || seen {
+		return err
+	}
 	m.RT.Logger.Warn("a notification intent was refused", "event", "notification_intent_refused", "sender", from,
 		"intent", intentID, "reason", reason)
 	if _, err := tx.Exec(ctx, `INSERT INTO rejected_intent (id, sender, intent_id, reason) VALUES ($1, $2, $3, $4)`,

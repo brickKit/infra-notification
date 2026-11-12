@@ -7,6 +7,7 @@ import (
 
 	core "github.com/brickKit/infra-notification/v3/internal/core"
 
+	"github.com/brickKit/be-sdk-go/v3/events"
 	"github.com/brickKit/be-sdk-go/v3/recoverypb"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
 	"github.com/stretchr/testify/assert"
@@ -29,12 +30,18 @@ func (fx *fixture) senderCheck() {
 	backwards := intent("test/buy", "approval_task", principal(sectest.Bob))
 	backwards["expires_at"] = "2020-01-01T00:00:00Z"
 	evil := intent("test/evil", "approval_task", principal(sectest.Bob))
+	// test/pay on its own stream, writing test/buy as both the envelope's source and the payload's sender: the stream
+	// is test/pay's, so it is test/pay that sent it (P18.8)
+	disguised := intent("test/buy", "approval_task", principal(sectest.Bob))
+	fx.publishAs("test/pay", "test/buy", "test.pay_notification.intent.v1", disguised["intent_id"].(string), 1, events.Full,
+		disguised)
 	fx.send("test/pay", forged)
+	fx.send("test/pay", forged) // redelivered: recorded once
 	fx.send("test/evil", evil)
 	for _, in := range []map[string]any{bad, unknown, backwards} {
 		fx.send("test/buy", in)
 	}
-	want := map[any]string{forged["intent_id"]: "not_the_sender", bad["intent_id"]: "malformed",
+	want := map[any]string{forged["intent_id"]: "not_the_sender", disguised["intent_id"]: "not_the_sender", bad["intent_id"]: "malformed",
 		unknown["intent_id"]: "unknown_category", backwards["intent_id"]: "malformed"}
 	got := map[any]string{}
 	require.Eventually(t, func() bool {
@@ -46,22 +53,27 @@ func (fx *fixture) senderCheck() {
 			p := x.(map[string]any)
 			got[p["intent_id"]] = p["reason"].(string)
 		}
-		return len(got) >= 4
+		return len(got) >= 5
 	}, 10*time.Second, 100*time.Millisecond, "the refused intents are listed")
+	var times int
+	require.NoError(t, fx.admin.QueryRow(fx.ctx, "SELECT count(*) FROM "+itSchema+".rejected_intent WHERE intent_id = $1",
+		forged["intent_id"]).Scan(&times))
+	assert.Equal(t, 1, times, "a redelivered refusal is recorded once")
 	for id, reason := range want {
 		assert.Equal(t, reason, got[id], id)
 	}
 	assert.NotContains(t, got, evil["intent_id"], "test/evil is not subscribed to")
 	var n int
 	require.NoError(t, fx.admin.QueryRow(fx.ctx, "SELECT count(*) FROM "+itSchema+".intent WHERE id = ANY($1::uuid[])",
-		[]any{forged["intent_id"], bad["intent_id"], unknown["intent_id"], backwards["intent_id"], evil["intent_id"]}).Scan(&n))
+		[]any{forged["intent_id"], disguised["intent_id"], bad["intent_id"], unknown["intent_id"], backwards["intent_id"],
+			evil["intent_id"]}).Scan(&n))
 	assert.Zero(t, n, "a refused intent delivers nothing")
 	code, out := fx.bob.do("GET", "/api/notification/rejected-intents", nil)
 	assert.Contains(t, []int{403, 404}, code, "the managers only: %v", out)
 	var audited int
 	require.NoError(t, fx.admin.QueryRow(fx.ctx, "SELECT count(*) FROM "+itSchema+".be_audit_log WHERE category = 'security_denial'").
 		Scan(&audited))
-	assert.GreaterOrEqual(t, audited, 4, "each refusal has its security record")
+	assert.Equal(t, 5, audited, "each refusal has one security record (the redelivered one none more)")
 }
 
 // recoveryChecks: a full recovery's checks are the recovery tool's only (be-protocol chapter 14); the notification

@@ -89,7 +89,7 @@ func (fx *fixture) expiry() {
 	time.Sleep(time.Until(exp) + 100*time.Millisecond)
 	fx.send("test/pay", intent("test/pay", "due_reminder", principal(carol))) // the next delivery run (or the minute's floor)
 	assert.Equal(t, "done", fx.ended("test/pay", in), "it ends when it has expired")
-	assert.Equal(t, map[string]string{carol: "written", "position:" + fx.le + "/" + pos: "expired"}, fx.results("test/pay", in))
+	assert.Equal(t, map[string]string{carol: "written", fx.posKey(pos): "expired"}, fx.results("test/pay", in))
 	fx.dir.set(fx.le+"/"+pos, true)
 }
 

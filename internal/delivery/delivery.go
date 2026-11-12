@@ -52,20 +52,20 @@ type pending struct {
 	ExpiresAt                         time.Time
 }
 
-// Deliver works the pending intents off, a batch per transaction, until every one has been tried once in this run:
-// an intent still waiting for the employee projection is not claimed again until the next run, so it does not hold
-// the ones behind it.
+// Deliver works the pending intents off, each in its own transaction (one that fails does not undo the others, and
+// no lock is held across a batch), until every one has been tried once in this run: an intent still waiting for the
+// employee projection is not claimed again until the next run, so it does not hold the ones behind it.
 func Deliver(m *core.Base, c *Counters, ctx context.Context, _ *work.Run) error {
 	tried := []string{}
 	for {
 		var n int
 		err := m.RT.DB.BackgroundTx(ctx, func(ctx context.Context, tx db.Tx) error {
-			batch, err := claim(ctx, tx, tried)
+			one, err := claim(ctx, tx, tried)
 			if err != nil {
 				return err
 			}
-			n = len(batch)
-			for _, p := range batch {
+			n = len(one)
+			for _, p := range one {
 				tried = append(tried, p.Sender+"/"+p.ID)
 				if _, err := deliver(m, c, ctx, tx, p); err != nil {
 					return err
@@ -73,18 +73,19 @@ func Deliver(m *core.Base, c *Counters, ctx context.Context, _ *work.Run) error 
 			}
 			return nil
 		})
-		if err != nil || n < core.Batch {
+		if err != nil || n == 0 {
 			return err
 		}
 	}
 }
 
-// claim locks a batch of pending intents, skipping the ones another replica works (protocol 01: an atomic claim).
+// claim locks the next pending intent not tried in this run, skipping the ones another replica works (protocol 01:
+// an atomic claim).
 func claim(ctx context.Context, tx db.Tx, tried []string) ([]pending, error) {
 	rows, err := tx.Query(ctx, `SELECT sender, id::text, category, title, link, template, params, collapse_key,
 			recipients, expires_at
-		FROM intent WHERE state = 'pending' AND NOT (sender || '/' || id::text) = ANY($2::text[])
-		ORDER BY received_at, sender, id LIMIT $1 FOR UPDATE SKIP LOCKED`, core.Batch, tried)
+		FROM intent WHERE state = 'pending' AND NOT (sender || '/' || id::text) = ANY($1::text[])
+		ORDER BY received_at, sender, id LIMIT 1 FOR UPDATE SKIP LOCKED`, tried)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +121,15 @@ func deliver(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, p pending
 			}
 			continue
 		}
+		key := positionKey(*r.Position, now)
+		var had bool // expanded once (or settled) already: its holders of that moment have their deliveries
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM delivery WHERE sender = $1 AND intent_id = $2::uuid
+			AND recipient = $3)`, p.Sender, p.ID, key).Scan(&had); err != nil {
+			return false, err
+		}
+		if had {
+			continue
+		}
 		holders, result, err := expand(m, ctx, tx, *r.Position, now)
 		if err != nil {
 			return false, err
@@ -131,17 +141,17 @@ func deliver(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, p pending
 			waiting = true
 			continue
 		}
-		if result != core.Written {
-			if err := record(ctx, tx, p, positionKey(*r.Position), core.InApp, result); err != nil {
-				return false, err
+		if result == core.Written { // the holders join the principals; the position is recorded as expanded
+			result = core.Expanded
+			for _, h := range holders {
+				if !seen[h] {
+					seen[h] = true
+					principals = append(principals, h)
+				}
 			}
-			continue
 		}
-		for _, h := range holders {
-			if !seen[h] {
-				seen[h] = true
-				principals = append(principals, h)
-			}
+		if err := record(ctx, tx, p, key, core.InApp, result); err != nil {
+			return false, err
 		}
 	}
 	cat, _ := core.CategoryOf(p.Category)
@@ -184,7 +194,15 @@ func expand(m *core.Base, ctx context.Context, tx db.Tx, pos notify.Position, no
 	return holders, core.Written, nil
 }
 
-func positionKey(p notify.Position) string { return "position:" + p.LegalEntity + "/" + p.PositionID }
+// positionKey names a position recipient in the deliveries: the legal entity, the position and the date it is
+// expanded on (two recipients of the same position on two dates are two).
+func positionKey(p notify.Position, now time.Time) string {
+	date := p.Date
+	if date == "" {
+		date = now.UTC().Format(time.DateOnly)
+	}
+	return "position:" + p.LegalEntity + "/" + p.PositionID + "@" + date
+}
 
 // deliverTo makes one principal's delivery on one channel once (P18.9): a result already recorded is not made again.
 func deliverTo(ctx context.Context, tx db.Tx, p pending, who, channel string, expired bool) error {

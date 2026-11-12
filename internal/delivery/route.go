@@ -7,10 +7,10 @@ import core "github.com/brickKit/infra-notification/v3/internal/core"
 func Route(category, preference string, expired bool) string {
 	c, _ := core.CategoryOf(category)
 	switch {
+	case c.Mandatory: // in-app is where a mandatory category falls back to: written even when expired (P18.6)
+		return core.Written
 	case expired:
 		return core.Expired
-	case c.Mandatory:
-		return core.Written
 	case preference == "on", preference == "" && c.DefaultOn:
 		return core.Written
 	}

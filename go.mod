@@ -3,8 +3,8 @@ module github.com/brickKit/infra-notification/v3
 go 1.27.0
 
 require (
-	github.com/brickKit/be-protocol/v3 v3.0.0-alpha.124
-	github.com/brickKit/be-sdk-go/v3 v3.0.0-alpha.128
+	github.com/brickKit/be-protocol/v3 v3.0.0-alpha.126
+	github.com/brickKit/be-sdk-go/v3 v3.0.0-alpha.129
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/stretchr/testify v1.12.1

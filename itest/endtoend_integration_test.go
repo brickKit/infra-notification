@@ -56,23 +56,23 @@ const (
 
 var streams = []events.Stream{{Name: "test.buy", Partitions: 4}, {Name: "test.pay", Partitions: 4}, {Name: "test.evil", Partitions: 4}}
 
-// directory is the positions' holders the test sets (core.Directory).
+// directory is the positions' holders the test sets (core.Directory), and whether the projection can prove each.
 type directory struct {
 	mu       sync.Mutex
 	holders  map[string][]string // by legal entity/position
-	complete bool
+	complete map[string]bool
 }
 
 func (d *directory) set(pos string, complete bool, holders ...string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.holders[pos], d.complete = holders, complete
+	d.holders[pos], d.complete[pos] = holders, complete
 }
 
 func (d *directory) Holders(_ context.Context, _ db.Tx, le, pos, _ string) ([]string, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.holders[le+"/"+pos], d.complete, nil
+	return d.holders[le+"/"+pos], d.complete[le+"/"+pos], nil
 }
 
 // fixture is the running member and the world, shared by the steps.
@@ -125,7 +125,7 @@ func start(t *testing.T) *fixture {
 				Valid: sdkauthz.Window{From: "2026-01-01T00:00:00Z"}})
 		}
 	}
-	fx := &fixture{t: t, ctx: ctx, w: w, admin: admin, le: ids.New().String(), dir: &directory{holders: map[string][]string{}}}
+	fx := &fixture{t: t, ctx: ctx, w: w, admin: admin, le: ids.New().String(), dir: &directory{holders: map[string][]string{}, complete: map[string]bool{}}}
 	portFree(t, itPort, itSystem)
 
 	// the test streams, clean each run (another run's events would come back)
@@ -204,6 +204,11 @@ func intent(from, category string, recipients ...any) map[string]any {
 }
 
 func principal(p string) map[string]any { return map[string]any{"principal": p} }
+
+// posKey is a position recipient's name in the deliveries: expanded on today's date (UTC).
+func (fx *fixture) posKey(pos string) string {
+	return "position:" + fx.le + "/" + pos + "@" + time.Now().UTC().Format(time.DateOnly)
+}
 
 func (fx *fixture) position(pos string) map[string]any {
 	return map[string]any{"position": map[string]any{"legal_entity_id": fx.le, "position_id": pos}}
@@ -301,6 +306,13 @@ func (fx *fixture) messageIntent(id string) string {
 // the source).
 func (fx *fixture) publish(from, typ, id string, version int64, kind events.Projection, data map[string]any) string {
 	fx.t.Helper()
+	return fx.publishAs(from, from, typ, id, version, kind, data)
+}
+
+// publishAs puts an event on one component's stream with another's name as its envelope source: what a publisher
+// that forges its source would send (the bus only lets it publish on its own stream).
+func (fx *fixture) publishAs(from, source, typ, id string, version int64, kind events.Projection, data map[string]any) string {
+	fx.t.Helper()
 	raw, err := json.Marshal(data)
 	require.NoError(fx.t, err)
 	stream := events.Stream{Name: strings.ReplaceAll(from, "/", "."), Partitions: 4}
@@ -309,7 +321,7 @@ func (fx *fixture) publish(from, typ, id string, version int64, kind events.Proj
 		Epoch: events.Epoch{Generation: 1, Timeline: 1}}
 	row.Digest = events.Digest(row.EventID, raw)
 	require.NoError(fx.t, fx.tr.Publish(fx.ctx, events.Message{Subject: events.Subject(stream.Name, row.Partition, row.Type),
-		Headers: row.Headers(from, strings.ReplaceAll(from, "/", "-")+"-it"), Data: raw}))
+		Headers: row.Headers(source, strings.ReplaceAll(from, "/", "-")+"-it"), Data: raw}))
 	return row.EventID
 }
 

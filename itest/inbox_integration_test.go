@@ -57,6 +57,26 @@ func (fx *fixture) inbox() {
 	require.Equal(t, 200, code, all)
 	assert.Zero(t, mine(fx.carol, "")["unread"])
 	assert.NotZero(t, mine(fx.bob, "")["unread"], "bob's are not marked")
+	// the unread count leaves the withdrawn ones out (bob has withdrawn messages from the merging step)
+	bobs := mine(fx.bob, "?limit=200")
+	unreadNow := 0
+	for _, x := range bobs["messages"].([]any) {
+		m := x.(map[string]any)
+		if m["read_at"] == nil && m["withdrawn"] == false {
+			unreadNow++
+		}
+	}
+	assert.EqualValues(t, unreadNow, bobs["unread"])
+	// the pages by cursor are the whole list, in order, once each
+	var paged []any
+	for cursor := ""; ; {
+		page := mine(fx.bob, "?limit=2&cursor="+cursor)
+		paged = append(paged, page["messages"].([]any)...)
+		if cursor = page["next_cursor"].(string); cursor == "" {
+			break
+		}
+	}
+	assert.Equal(t, bobs["messages"], paged)
 	code, _ = fx.dave.do("GET", "/api/notification/messages", nil)
 	assert.Contains(t, []int{403, 404}, code, "no grant")
 	code, _ = fx.carol.do("GET", "/api/notification/messages?unread=maybe", nil)

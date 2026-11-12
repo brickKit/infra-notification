@@ -6,7 +6,7 @@ import core "github.com/brickKit/infra-notification/v3/internal/core"
 // admit step).
 type Arrival struct {
 	Kind                 string
-	SenderIsSource       bool // the payload's sender is the envelope's source component
+	SenderIsSource       bool // the payload's sender and the envelope's source are the owner of the stream it came on
 	ShapeOK              bool // the payload follows be.notification.intent.v1
 	Category             string
 	ExpiresAfterOccurred bool
@@ -30,15 +30,16 @@ const (
 	Stale     = "stale"
 )
 
-// Admit decides an arriving intent (NT02, NT04): the refusals in P18.8's order, then the duplicate (P18.9), then the
+// Admit decides an arriving intent (NT02, NT04): the refusals in P18.8's order (the shape, the sender, the category,
+// the expiry), then the duplicate (P18.9), then the
 // merge key's sequence (P18.7).
 func Admit(a Arrival) Admission {
 	_, known := core.CategoryOf(a.Category)
 	switch {
+	case !a.ShapeOK: // first: a payload off the contract has no sender to trust
+		return Admission{Answer: core.Malformed}
 	case !a.SenderIsSource:
 		return Admission{Answer: core.NotTheSender}
-	case !a.ShapeOK:
-		return Admission{Answer: core.Malformed}
 	case !known:
 		return Admission{Answer: core.UnknownCategory}
 	case a.Kind == "deliver" && !a.ExpiresAfterOccurred:

@@ -3,6 +3,8 @@
 package itest
 
 import (
+	"time"
+
 	"github.com/brickKit/be-sdk-go/v3/ids"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
 	"github.com/stretchr/testify/assert"
@@ -65,8 +67,8 @@ func (fx *fixture) positions() {
 	in := intent("test/pay", "approval_task", fx.position(pos), principal(carol), fx.position(empty))
 	fx.send("test/pay", in)
 	assert.Equal(t, "done", fx.ended("test/pay", in))
-	assert.Equal(t, map[string]string{carol: "written", sectest.Bob: "written", "position:" + fx.le + "/" + empty: "unresolvable"},
-		fx.results("test/pay", in))
+	assert.Equal(t, map[string]string{carol: "written", sectest.Bob: "written", fx.posKey(pos): "expanded",
+		fx.posKey(empty): "unresolvable"}, fx.results("test/pay", in))
 	assert.Equal(t, []bool{false}, fx.messagesOf(fx.carol, in), "one message by name and by position")
 
 	fx.dir.set(fx.le+"/"+later, false, sectest.Bob) // incomplete: bob is not to be relied on yet
@@ -78,5 +80,39 @@ func (fx *fixture) positions() {
 	nudge := intent("test/pay", "due_reminder", principal(carol)) // a new intent queues a delivery run at once
 	fx.send("test/pay", nudge)
 	assert.Equal(t, "done", fx.ended("test/pay", wait))
-	assert.Equal(t, map[string]string{carol: "written"}, fx.results("test/pay", wait))
+	assert.Equal(t, map[string]string{carol: "written", fx.posKey(later): "expanded"}, fx.results("test/pay", wait))
+
+	// a position waiting for the projection while the intent waits: a newer sequence of its merge key supersedes it
+	// before it is ever delivered, and only the newer one is (NT04)
+	queued := ids.New().String()
+	fx.dir.set(fx.le+"/"+queued, false, carol)
+	key := "task:" + ids.New().String()
+	old := intent("test/pay", "approval_task", fx.position(queued))
+	old["collapse_key"], old["collapse_seq"] = key, 1
+	fx.send("test/pay", old)
+	fx.taken("test/pay", old)
+	newer := intent("test/pay", "approval_task", principal(carol))
+	newer["collapse_key"], newer["collapse_seq"] = key, 2
+	fx.send("test/pay", newer)
+	assert.Equal(t, "superseded", fx.ended("test/pay", old), "never delivered")
+	assert.Equal(t, "done", fx.ended("test/pay", newer))
+	assert.Empty(t, fx.results("test/pay", old))
+	assert.Equal(t, []bool{false}, fx.messagesOf(fx.carol, newer))
+	fx.dir.set(fx.le+"/"+queued, true, carol)
+
+	// a position expanded while another one of the same intent waits is not expanded again: its holder of that
+	// moment has the message, the one who takes the position over later does not (NT06)
+	first, second := ids.New().String(), ids.New().String()
+	fx.dir.set(fx.le+"/"+first, true, carol)
+	both := intent("test/pay", "due_reminder", fx.position(first), fx.position(second))
+	fx.dir.set(fx.le+"/"+second, false)
+	fx.send("test/pay", both)
+	require.Eventually(t, func() bool { return fx.results("test/pay", both)[carol] == "written" }, 20*time.Second,
+		100*time.Millisecond)
+	fx.dir.set(fx.le+"/"+first, true, sectest.Bob)                            // bob holds it now
+	fx.dir.set(fx.le+"/"+second, true)                                        // nobody holds the other
+	fx.send("test/pay", intent("test/pay", "due_reminder", principal(carol))) // the next delivery run
+	assert.Equal(t, "done", fx.ended("test/pay", both))
+	assert.Equal(t, map[string]string{carol: "written", fx.posKey(first): "expanded", fx.posKey(second): "unresolvable"},
+		fx.results("test/pay", both), "bob took the position after it was expanded")
 }

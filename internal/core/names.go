@@ -83,6 +83,8 @@ const (
 	PreferenceOff = "preference_off"
 	Expired       = "expired"
 	Unresolvable  = "unresolvable"
+	// Expanded is a position recipient whose holders were found (each has its own result): it is not expanded again.
+	Expanded = "expanded"
 )
 
 // Parameters.
