@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brickkit.dev/infra-notification/events/infra.notification_delivery.recorded.v1.schema.json",
+  "title": "infra.notification_delivery.recorded.v1",
+  "description": "An intent's delivery results (docs/design.md NT10), an incremental fact published once every recipient of the intent has its result: for each principal (or a position that could not be expanded in time) and channel, written, preference_off, expired or unresolvable. It carries no title and no link.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fact_id", "sender", "intent_id", "category", "results", "at"],
+  "properties": {
+    "fact_id": {"type": "string", "format": "uuid"},
+    "sender": {"type": "string"},
+    "intent_id": {"type": "string", "format": "uuid"},
+    "category": {"type": "string"},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recipient", "channel", "result"],
+        "properties": {
+          "recipient": {"type": "string", "description": "a principal, or position:<legal entity>/<position> for one that could not be expanded"},
+          "channel": {"enum": ["in_app"]},
+          "result": {"enum": ["written", "preference_off", "expired", "unresolvable"]}
+        }
+      }
+    },
+    "at": {"type": "string", "format": "date-time"}
+  }
+}

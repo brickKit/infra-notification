@@ -1,0 +1,152 @@
+openapi: 3.1.0
+info:
+  title: infra/notification user surface
+  version: 3.0.0
+  description: >-
+    Notifications (assembly protocol 10, be-protocol chapter 18): the in-app messages written from the notification
+    intents of the deployment's senders, and each person's preferences by category and channel. Every route needs a
+    platform access token and the operation in x-operation; every message and preference is the caller's own: another
+    one's message answers 404. A notification grants nothing: a message's link is checked again, with the reader's
+    permissions of the moment, by the component it points to. Errors are application/problem+json with a reason.
+    Lists page by cursor only (protocol 14).
+paths:
+  /api/notification/messages:
+    get:
+      operationId: listMyMessages
+      x-operation: infra.notification.message.read
+      summary: My in-app messages, the newest first, with the unread count (NT08)
+      parameters:
+        - {name: unread, in: query, schema: {type: boolean}, description: 'true: only the unread ones (not read, not withdrawn)'}
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: one page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages, unread, next_cursor]
+                properties:
+                  messages: {type: array, items: {$ref: '#/components/schemas/Message'}}
+                  unread: {type: integer, minimum: 0, description: 'my messages neither read nor withdrawn'}
+                  next_cursor: {type: string}
+        default: {$ref: '#/components/responses/problem'}
+  /api/notification/messages/{id}/read:
+    post:
+      operationId: markMessageRead
+      x-operation: infra.notification.message.mark
+      summary: Mark one of my messages read (the first moment stays; another one's message answers 404)
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: the message, content: {application/json: {schema: {$ref: '#/components/schemas/Message'}}}}
+        default: {$ref: '#/components/responses/problem'}
+  /api/notification/messages/read-all:
+    post:
+      operationId: markAllMessagesRead
+      x-operation: infra.notification.message.mark
+      summary: Mark every unread message of mine read
+      responses:
+        '200':
+          description: how many were marked
+          content:
+            application/json:
+              schema: {type: object, required: [marked], properties: {marked: {type: integer, minimum: 0}}}
+        default: {$ref: '#/components/responses/problem'}
+  /api/notification/preferences:
+    get:
+      operationId: getMyPreferences
+      x-operation: infra.notification.preference.read
+      summary: My switch of every category and channel of the catalog (NT09)
+      responses:
+        '200': {description: the preferences, content: {application/json: {schema: {$ref: '#/components/schemas/Preferences'}}}}
+        default: {$ref: '#/components/responses/problem'}
+  /api/notification/preferences/{category}/{channel}:
+    put:
+      operationId: setMyPreference
+      x-operation: infra.notification.preference.manage
+      summary: Turn one category's channel on or off for me; a category that must be delivered answers REQUEST_INVALID (NT09)
+      parameters:
+        - {name: category, in: path, required: true, schema: {$ref: '#/components/schemas/Category'}}
+        - {name: channel, in: path, required: true, schema: {$ref: '#/components/schemas/Channel'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [enabled], properties: {enabled: {type: boolean}}}
+      responses:
+        '200': {description: all my preferences after the change, content: {application/json: {schema: {$ref: '#/components/schemas/Preferences'}}}}
+        default: {$ref: '#/components/responses/problem'}
+  /api/notification/rejected-intents:
+    get:
+      operationId: listRejectedIntents
+      x-operation: infra.notification.rejection.read
+      summary: Intents refused by the publisher check or the contract (NT02), the latest first
+      parameters:
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: one page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [intents, next_cursor]
+                properties:
+                  intents:
+                    type: array
+                    items:
+                      type: object
+                      required: [sender, intent_id, reason, at]
+                      properties:
+                        sender: {type: string, description: 'the envelope source component'}
+                        intent_id: {type: string}
+                        reason: {enum: [not_the_sender, malformed, unknown_category]}
+                        at: {type: string, format: date-time}
+                  next_cursor: {type: string}
+        default: {$ref: '#/components/responses/problem'}
+components:
+  parameters:
+    cursor: {name: cursor, in: query, schema: {type: string}}
+    limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+  responses:
+    problem:
+      description: an error (application/problem+json with reason)
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    Problem: {type: object, required: [reason], properties: {reason: {type: string}, detail: {type: string}}}
+    Category: {enum: [approval_task, due_reminder, security_alert, legal_notice, external_comm, marketing]}
+    Channel: {enum: [in_app]}
+    Message:
+      type: object
+      required: [id, sender, category, title, link, template, params, created_at, read_at, withdrawn]
+      properties:
+        id: {type: string, format: uuid}
+        sender: {type: string}
+        category: {$ref: '#/components/schemas/Category'}
+        title: {type: string}
+        link: {type: string, description: 'a path in the system, opened with the reader''s permissions of the moment'}
+        template: {type: [string, 'null'], description: 'the sender''s template, for a client that renders in the reader''s language'}
+        params: {type: [object, 'null'], additionalProperties: {type: string}}
+        created_at: {type: string, format: date-time}
+        read_at: {type: [string, 'null'], format: date-time}
+        withdrawn: {type: boolean, description: 'a newer intent of its merge key superseded it (e.g. the task was decided)'}
+    Preferences:
+      type: object
+      required: [preferences]
+      properties:
+        preferences:
+          type: array
+          items:
+            type: object
+            required: [category, channel, enabled, mandatory, default]
+            properties:
+              category: {$ref: '#/components/schemas/Category'}
+              channel: {$ref: '#/components/schemas/Channel'}
+              enabled: {type: boolean}
+              mandatory: {type: boolean, description: 'must be delivered: cannot be turned off'}
+              default: {type: boolean}
