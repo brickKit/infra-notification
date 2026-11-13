@@ -4,15 +4,15 @@ kind: Component
 metadata:
   id: infra/notification
   name: Notification
-  version: 3.0.10
+  version: 3.0.11
   description: "Notifications (protocol 10, be-protocol chapter 18): the notification intents of the deployment's senders, routed by category and each person's preferences, positions expanded to their holders, written as in-app messages and handed to the configured external channels (be-protocol chapter 20); a delivery result per intent"
   repository: https://github.com/brickKit/infra-notification
 
 dependencies:
   components:
-    - id: mdm/employee@3.0.15
+    - id: mdm/employee@3.0.16
       optional: true
-    - id: integration/im-dingtalk@3.0.3
+    - id: integration/im-dingtalk@3.0.4
       optional: true
 
 events:
