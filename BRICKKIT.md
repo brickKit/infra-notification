@@ -2,7 +2,7 @@
 
 ## 组件定位
 
-通知：收下部署配置的发送方发出的通知意图（线协议第 18 章的共享意图契约），按类别与每个人的偏好投递；首批唯一的渠道是本组件自己的站内消息。
+通知：收下部署配置的发送方发出的通知意图（线协议第 18 章的共享意图契约），按类别与每个人的偏好投递：本组件自己的站内消息，与部署配置的外部渠道（渠道成员，线协议第 20 章；第一个是 `integration/im-dingtalk`）。
 - **认收**：只收配置里的发送方的意图，发送方以意图所在的流为准（消息系统按服务身份限制谁能在哪个流上发布）；不合契约、发送方或来源不是流的属主、类别不在目录里、到期不晚于发生的，拒收并写安全审计（重投不重复记），管理员能列出来。同一意图再到不再投。
 - **合并与撤回**：同一发送方、同一合并键的意图，序号大的取代序号小的（已写的站内消息标为已撤回），迟到的旧序号作废；撤回意图只做取代（例：审批任务决定后撤回待审批的消息）。
 - **收件人**：主体，或岗位（投递时按员工投影展开为当时的持有人，每个意图只展开一次；投影不完整时等，不按旧数据投；部署没有 `mdm/employee` 时岗位展开不了）。
@@ -19,6 +19,7 @@
 - 数据库：PostgreSQL 16 及以上；schema `infra_notification`，属主角色 `infra_notification_owner`（只供迁移）与运行角色 `infra_notification_rw`（只有读写数据的权限），名字来自装配项目的注册表。三者由部署方在第一次启动前建好；表由本组件的迁移建，迁移里不建角色、不授权。
 - 消息系统（`BUS_URL`）与实现实例（`IMPLEMENTATION_INSTANCE`）：本组件在流 `infra.notification` 上发投递结果；按 `NOTIFICATION_INTENT_SOURCES` 订阅每个发送方的流（组件 `erp/purchase` 的流 `erp.purchase` 上的 `erp.purchase_notification.intent.v1`）。
 - **`NOTIFICATION_INTENT_SOURCES`**：逗号分隔的发送方组件 ID，例 `erp/purchase,erp/payment`（用 SDK 流程内核的组件发审批待办的意图）。格式不对、重复，成员不启动；不配时什么也不收。
+- **`NOTIFICATION_CHANNELS`**：外部渠道，逗号分隔的“渠道名=渠道成员”，例 `dingtalk=integration/im-dingtalk`。渠道成员要在部署里（本组件把它声明为可选依赖，地址由平台注入），并把本组件的投递操作（钉钉是 `integration.im_dingtalk.system.deliver`）授予本组件。审批待办、到期提醒、安全提醒投到站内与全部外部渠道；外部渠道可以按“类别 × 渠道”关掉；不配时只有站内。
 - 可选 `mdm/employee`：岗位类收件人按它的员工投影展开（只经事件与它的水位来源，不在请求里调它）；没有时岗位类收件人展开不了，发给主体的照常。
 - 授权：`infra.notification.message.read`、`infra.notification.message.mark`、`infra.notification.preference.read`、`infra.notification.preference.manage` 授予所有要用站内消息的人（每个人只看得到、改得到自己的）；`infra.notification.rejection.read` 给排障的管理员。
 - 部署的服务证书（`SERVICE_TLS_*`）；身份与授权（`IAM_*`、`AUTHZ_GRPC_URL`、`DEPLOYMENT_ID`）；审计（`AUDIT_GRPC_URL`）。
@@ -27,7 +28,7 @@
 ## 依赖说明
 
 - 必需：数据库、消息系统、身份成员、授权成员。
-- 可选：`mdm/employee`（岗位展开）、审计组件。
+- 可选：`mdm/employee`（岗位展开）、审计组件、渠道成员 `integration/im-dingtalk`（钉钉；`NOTIFICATION_CHANNELS` 配了它才用）。
 - 只经事件：配置里的发送方（不声明依赖；没装的发送方的流是空的，订阅只是等着）。
 - 投递的轮次：收下一个意图时立刻一轮，员工投影变化而有意图在等时一轮，此外每分钟一轮；等投影的岗位与已到期的意图最迟一分钟收尾。
 
@@ -38,6 +39,7 @@
 | 键 | 说明 |
 | --- | --- |
 | `NOTIFICATION_INTENT_SOURCES` | 收谁的意图（见部署前准备） |
+| `NOTIFICATION_CHANNELS` | 外部渠道（见部署前准备） |
 | `DEPLOYMENT_ID`、`IAM_ISSUER`、`IAM_JWKS_URL`、`AUTHZ_GRPC_URL`、`SERVICE_TLS_CERT_FILE`、`SERVICE_TLS_KEY_FILE`、`SERVICE_TLS_CA_FILE`（必填） | 受保护的用户面与 mTLS 的系统面要用；部署身份、身份与授权的地址在外壳里是进程级的键 |
 | `PG_HOST`、`PG_DATABASE`、`PG_USER`、`PG_PASSWORD`、`PG_SCHEMA`（必填） | 自己的数据库，密码是密钥；迁移另用 `PG_OWNER_USER`、`PG_OWNER_PASSWORD` |
 | `BUS_URL`（必填，密钥）、`IMPLEMENTATION_INSTANCE`（必填） | 消息系统；实现实例是安装时生成的随机身份 |

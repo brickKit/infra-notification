@@ -39,7 +39,10 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/ids"
 	"github.com/brickKit/be-sdk-go/v3/launcher"
 	"github.com/brickKit/be-sdk-go/v3/runtime"
+	"github.com/brickKit/be-sdk-go/v3/channelpb"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +51,7 @@ const (
 	itPort   = "28202"
 	itBase   = "http://localhost:" + itPort
 	itSystem = "localhost:9202"
+	itChan   = "localhost:19207" // the fake channel member (integration/im-dingtalk)
 	itSchema = "infra_notification_it"
 	senders  = "test/buy,test/pay"                    // the deployment's choice (NT01); test/evil is not one
 	carol    = "0190f3a1-0000-7000-8000-0000000000c3" // reads and marks her messages, sets her preferences
@@ -83,6 +87,7 @@ type fixture struct {
 	admin *pgx.Conn
 	tr    events.Transport
 	dir   *directory
+	chn   *fakeChannel
 	alice client // everything, the refused intents too
 	bob   client
 	carol client
@@ -97,6 +102,7 @@ func TestNotificationEndToEnd(t *testing.T) {
 	fx.preferences()
 	fx.positions()
 	fx.expiry()
+	fx.externals()
 	fx.inbox()
 	fx.senderCheck()
 	fx.recoveryChecks()
@@ -126,7 +132,14 @@ func start(t *testing.T) *fixture {
 		}
 	}
 	fx := &fixture{t: t, ctx: ctx, w: w, admin: admin, le: ids.New().String(), dir: &directory{holders: map[string][]string{}, complete: map[string]bool{}}}
-	portFree(t, itPort, itSystem)
+	portFree(t, itPort, itSystem, itChan)
+	fx.chn = &fakeChannel{unmapped: map[string]bool{carol: true}}
+	ln, err := net.Listen("tcp", itChan)
+	require.NoError(t, err)
+	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(w.TLS(t, "integration/im-dingtalk").ServerConfig())))
+	channelpb.RegisterChannelServiceServer(srv, fx.chn)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(srv.Stop)
 
 	// the test streams, clean each run (another run's events would come back)
 	js, err := jetstream.Connect(natsURL, "notification-it-clean")
@@ -147,7 +160,8 @@ func start(t *testing.T) *fixture {
 		"STOP_DRAIN_DELAY": "50ms", "PG_HOST": u.Hostname(), "PG_PORT": u.Port(), "PG_DATABASE": strings.TrimPrefix(u.Path, "/"),
 		"PG_USER": u.User.Username(), "PG_PASSWORD": pw, "PG_SCHEMA": itSchema, "PG_OWNER_USER": u.User.Username(),
 		"PG_OWNER_PASSWORD": pw, "BUS_URL": natsURL, "IMPLEMENTATION_INSTANCE": ids.New().String(),
-		core.KeySources: senders} {
+		core.KeySources: senders, core.KeyChannels: "dingtalk=integration/im-dingtalk",
+		"INTEGRATION_IM_DINGTALK_GRPC_ENDPOINT": "http://" + itChan} {
 		env[k] = v
 	}
 	var logs bytes.Buffer
@@ -264,11 +278,11 @@ func (fx *fixture) ended(from string, in map[string]any) string {
 	return state
 }
 
-// results are an intent's delivery results by recipient.
+// results are an intent's in-app delivery results by recipient (external channels: externals).
 func (fx *fixture) results(from string, in map[string]any) map[string]string {
 	fx.t.Helper()
-	rows, err := fx.admin.Query(fx.ctx, "SELECT recipient, result FROM "+itSchema+".delivery WHERE sender = $1 AND intent_id = $2",
-		from, in["intent_id"])
+	rows, err := fx.admin.Query(fx.ctx, "SELECT recipient, result FROM "+itSchema+".delivery WHERE sender = $1 AND intent_id = $2"+
+		" AND channel = 'in_app'", from, in["intent_id"])
 	require.NoError(fx.t, err)
 	defer rows.Close()
 	out := map[string]string{}

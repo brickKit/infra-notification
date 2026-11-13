@@ -17,7 +17,7 @@ import (
 
 // Identity.
 const (
-	Version  = "3.0.5"
+	Version  = "3.0.6"
 	GRPCPort = 9202
 )
 
@@ -30,12 +30,16 @@ func migrations() fs.FS {
 }
 
 // Keys are the component's own configuration keys.
-func Keys() []config.Key { return []config.Key{{Name: core.KeySources, Type: config.String}} }
+func Keys() []config.Key {
+	return []config.Key{{Name: core.KeySources, Type: config.String}, {Name: core.KeyChannels, Type: config.String}}
+}
 
 // Own describes the own keys for the manifest's configSchema.
 var Own = map[string]string{
 	core.KeySources: "the senders whose notification intents are taken in: component IDs, comma separated (e.g. " +
 		"erp/purchase,erp/payment); unset: none",
+	core.KeyChannels: "the external channels: name=channel member, comma separated (e.g. dingtalk=integration/im-dingtalk); " +
+		"each member is an optional dependency of this component; unset: in-app only",
 }
 
 // Definition is the component as the launcher and the shells take it.

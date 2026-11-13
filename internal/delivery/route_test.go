@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The protocol's notification-intent vectors, route step (P18.3, P18.6): Route answers each as the vector does.
+// The protocol's notification-intent vectors, route step (P18.3, P18.6, P20.4): Route answers each as the vector does.
 func TestRouteFollowsTheProtocolsVectors(t *testing.T) {
 	raw, err := protocol.Vectors.ReadFile("vectors/notification-intent.json")
 	require.NoError(t, err)
@@ -17,8 +17,8 @@ func TestRouteFollowsTheProtocolsVectors(t *testing.T) {
 		Cases []struct {
 			ID   string
 			Case struct {
-				Step, Category, Preference string
-				Expired                    bool
+				Step, Category, Channel, Preference string
+				Expired                             bool
 			}
 			Expect struct{ Result string }
 		}
@@ -34,7 +34,11 @@ func TestRouteFollowsTheProtocolsVectors(t *testing.T) {
 		if pref == "unset" {
 			pref = ""
 		}
-		assert.Equal(t, v.Expect.Result, Route(v.Case.Category, pref, v.Case.Expired), v.ID)
+		ch := v.Case.Channel
+		if ch == "external" {
+			ch = "dingtalk" // any configured external channel
+		}
+		assert.Equal(t, v.Expect.Result, Route(v.Case.Category, ch, pref, v.Case.Expired), v.ID)
 	}
 	assert.Greater(t, n, 10)
 }

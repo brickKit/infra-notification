@@ -22,7 +22,7 @@ type Preference struct {
 }
 
 // mine reads the caller's switches over the catalog: a row overrides the category's default.
-func mine(ctx context.Context, tx db.Tx, me string) ([]Preference, error) {
+func mine(m *core.Base, ctx context.Context, tx db.Tx, me string) ([]Preference, error) {
 	set := map[[2]string]bool{}
 	rows, err := tx.Query(ctx, `SELECT category, channel, enabled FROM preference WHERE principal = $1`, me)
 	if err != nil {
@@ -40,9 +40,10 @@ func mine(ctx context.Context, tx db.Tx, me string) ([]Preference, error) {
 	rows.Close()
 	out := []Preference{}
 	for _, c := range core.Catalog {
-		for _, ch := range c.Channels {
-			p := Preference{Category: c.Name, Channel: ch, Enabled: c.DefaultOn, Mandatory: c.Mandatory, Default: c.DefaultOn}
-			if on, ok := set[[2]string{c.Name, ch}]; ok && !c.Mandatory {
+		for _, ch := range c.Channels(m.Channels) {
+			locked := c.Mandatory && ch == core.InApp // only a mandatory category's in-app is locked (NT07)
+			p := Preference{Category: c.Name, Channel: ch, Enabled: c.DefaultOn, Mandatory: locked, Default: c.DefaultOn}
+			if on, ok := set[[2]string{c.Name, ch}]; ok && !locked {
 				p.Enabled = on
 			}
 			out = append(out, p)
@@ -60,7 +61,7 @@ func Mine(m *core.Base, c *httpx.Context) error {
 	var out []Preference
 	err = m.RT.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
 		var err error
-		out, err = mine(ctx, tx, me)
+		out, err = mine(m, ctx, tx, me)
 		return err
 	})
 	if err != nil {
@@ -69,8 +70,8 @@ func Mine(m *core.Base, c *httpx.Context) error {
 	return c.JSON(200, map[string]any{"preferences": out})
 }
 
-// Set turns one category's channel on or off for the caller (NT09): a category or channel not in the catalog, or a
-// category that must be delivered, answers REQUEST_INVALID.
+// Set turns one category's channel on or off for the caller (NT09): a category or channel not in the catalog, or the
+// in-app channel of a category that must be delivered, answers REQUEST_INVALID.
 func Set(m *core.Base, c *httpx.Context) error {
 	ctx, me, err := core.Check(c, core.OpPrefManage)
 	if err != nil {
@@ -86,10 +87,10 @@ func Set(m *core.Base, c *httpx.Context) error {
 	switch {
 	case !ok:
 		return core.Invalid("category", "not a category of the catalog")
-	case !slices.Contains(cat.Channels, c.Param("channel")):
+	case !slices.Contains(cat.Channels(m.Channels), c.Param("channel")):
 		return core.Invalid("channel", "not a channel of this category")
-	case cat.Mandatory:
-		return core.Invalid("category", "this category must be delivered: it cannot be turned off or on")
+	case cat.Mandatory && c.Param("channel") == core.InApp:
+		return core.Invalid("category", "this category must be delivered in-app: it cannot be turned off or on")
 	}
 	var out []Preference
 	err = m.RT.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
@@ -99,7 +100,7 @@ func Set(m *core.Base, c *httpx.Context) error {
 			return err
 		}
 		var err error
-		out, err = mine(ctx, tx, me)
+		out, err = mine(m, ctx, tx, me)
 		return err
 	})
 	if err != nil {

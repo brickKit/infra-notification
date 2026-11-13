@@ -4,13 +4,15 @@ kind: Component
 metadata:
   id: infra/notification
   name: Notification
-  version: 3.0.5
-  description: "Notifications (protocol 10, be-protocol chapter 18): the notification intents of the deployment's senders, routed by category and each person's preferences, positions expanded to their holders, written as in-app messages (the first channel); a delivery result per intent"
+  version: 3.0.6
+  description: "Notifications (protocol 10, be-protocol chapter 18): the notification intents of the deployment's senders, routed by category and each person's preferences, positions expanded to their holders, written as in-app messages and handed to the configured external channels (be-protocol chapter 20); a delivery result per intent"
   repository: https://github.com/brickKit/infra-notification
 
 dependencies:
   components:
     - id: mdm/employee@3.0.13
+      optional: true
+    - id: integration/im-dingtalk@3.0.0
       optional: true
 
 events:
@@ -81,6 +83,9 @@ configSchema:
         - info
         - warn
         - error
+      type: string
+    NOTIFICATION_CHANNELS:
+      description: 'the external channels: name=channel member, comma separated (e.g. dingtalk=integration/im-dingtalk); each member is an optional dependency of this component; unset: in-app only'
       type: string
     NOTIFICATION_INTENT_SOURCES:
       description: 'the senders whose notification intents are taken in: component IDs, comma separated (e.g. erp/purchase,erp/payment); unset: none'

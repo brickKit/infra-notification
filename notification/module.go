@@ -2,6 +2,8 @@ package notification
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"time"
 
 	core "github.com/brickKit/infra-notification/v3/internal/core"
@@ -26,14 +28,23 @@ type Module struct {
 	employees *flow.Employees // nil without mdm/employee
 }
 
-// New builds the module from its runtime: the deployment's senders (a malformed configuration stops the member,
-// NT01) and, when the deployment has mdm/employee, the employee projection the positions expand against (NT06).
+// New builds the module from its runtime: the deployment's senders and external channels (a malformed
+// configuration stops the member, NT01, NT13) and, when the deployment has mdm/employee, the employee projection the positions expand against (NT06).
 func New(rt *runtime.Runtime) (*Module, error) {
 	s, err := sources.Parse(rt.Config.String(core.KeySources))
 	if err != nil {
 		return nil, err
 	}
-	m := &Module{b: &core.Base{RT: rt, Senders: s}, counters: delivery.NewCounters(rt.Metrics)}
+	chs, err := sources.Channels(rt.Config.String(core.KeyChannels))
+	if err != nil {
+		return nil, err
+	}
+	for _, ch := range chs { // a channel member must be an optional dependency: its address comes from the platform
+		if !slices.Contains(core.ChannelMembers, ch.Component) {
+			return nil, fmt.Errorf("%s: %s is not a channel member this component declares", core.KeyChannels, ch.Component)
+		}
+	}
+	m := &Module{b: &core.Base{RT: rt, Senders: s, Channels: chs}, counters: delivery.NewCounters(rt.Metrics)}
 	if e, ok := flow.NewEmployees(rt); ok {
 		m.employees, m.b.Directory = e, e
 		e.OnChange(delivery.EmployeesChanged(intents.JobDeliverNow))
@@ -94,6 +105,13 @@ func (m *Module) Jobs(j *work.Jobs) error {
 		Handle: deliver})
 	j.Add(work.Job{Name: delivery.JobDeliver, Kind: work.Singleton, Effect: work.Local, Interval: core.DeliverEvery,
 		MaxAttempts: work.Unlimited, Handle: deliver})
+	if len(m.b.Channels) > 0 { // the external deliveries, handed over by row outside any transaction (NT13)
+		external := func(ctx context.Context, r *work.Run) error { return delivery.DeliverExternal(m.b, m.counters, ctx, r) }
+		j.Add(work.Job{Name: delivery.JobExternal, Kind: work.Singleton, Effect: work.IdempotentExternal,
+			Interval: 15 * time.Second, MaxAttempts: work.Unlimited, Handle: external})
+		j.Add(work.Job{Name: delivery.JobExternalNow, Kind: work.Queue, Effect: work.IdempotentExternal,
+			MaxAttempts: work.Unlimited, Handle: external})
+	}
 	j.Add(work.Job{Name: delivery.JobPurge, Kind: work.Singleton, Effect: work.Local, Interval: 24 * time.Hour,
 		MaxAttempts: work.Unlimited, Handle: func(ctx context.Context, r *work.Run) error { return delivery.Purge(m.b, ctx, r) }})
 	return nil

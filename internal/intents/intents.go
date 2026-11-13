@@ -51,7 +51,7 @@ func OnEvent(m *core.Base, owner string, ctx context.Context, tx db.Tx, e events
 		id = e.RecordID
 	}
 	a := Arrival{Kind: in.Kind, ShapeOK: parsed && shapeOK(e.Data), Category: in.Category,
-		SenderIsSource: in.Sender == owner && e.Source == "urn:be:"+owner && e.Stream == sources.Stream(owner),
+		SenderIsSource:       in.Sender == owner && e.Source == "urn:be:"+owner && e.Stream == sources.Stream(owner),
 		ExpiresAfterOccurred: notify.ExpiresInTime(in)}
 	if a.SenderIsSource && a.ShapeOK {
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM intent WHERE sender = $1 AND id = $2::uuid)`, from, in.ID).
@@ -136,8 +136,14 @@ func supersede(ctx context.Context, tx db.Tx, in notify.Intent) error {
 		WHERE sender = $1 AND collapse_key = $2 AND state = 'pending'`, in.Sender, in.CollapseKey); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `UPDATE message SET withdrawn_at = now()
-		WHERE sender = $1 AND collapse_key = $2 AND withdrawn_at IS NULL`, in.Sender, in.CollapseKey)
+	if _, err := tx.Exec(ctx, `UPDATE message SET withdrawn_at = now()
+		WHERE sender = $1 AND collapse_key = $2 AND withdrawn_at IS NULL`, in.Sender, in.CollapseKey); err != nil {
+		return err
+	}
+	// the external deliveries still waiting are not handed over any more (NT04, NT13)
+	_, err := tx.Exec(ctx, `UPDATE delivery d SET result = 'superseded', at = now(), next_at = NULL FROM intent i
+		WHERE d.result = 'pending' AND i.sender = d.sender AND i.id = d.intent_id AND i.sender = $1 AND i.collapse_key = $2
+		AND i.collapse_seq < $3`, in.Sender, in.CollapseKey, in.CollapseSeq)
 	return err
 }
 
@@ -151,12 +157,17 @@ func insert(ctx context.Context, tx db.Tx, in notify.Intent, state string) error
 	if in.Params != nil {
 		params, _ = json.Marshal(in.Params)
 	}
+	var actions []byte
+	if len(in.Actions) > 0 { // the grants, not secrets; only handed to the channels that take actions (NT14)
+		actions, _ = json.Marshal(in.Actions)
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO intent (sender, id, category, kind, recipients, title, link, template, params,
-			collapse_key, collapse_seq, occurred_at, expires_at, state, ended_at)
+			collapse_key, collapse_seq, occurred_at, expires_at, state, ended_at, actions, action_channels)
 		VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::timestamptz, $14,
-			CASE WHEN $14 = 'pending' THEN NULL ELSE now() END)`,
+			CASE WHEN $14 = 'pending' THEN NULL ELSE now() END, $15, $16)`,
 		in.Sender, in.ID, in.Category, in.Kind, recipients, nullable(in.Title), nullable(in.Link), nullable(in.Template),
-		params, nullable(in.CollapseKey), nullableSeq(in), in.OccurredAt, nullable(in.ExpiresAt), state)
+		params, nullable(in.CollapseKey), nullableSeq(in), in.OccurredAt, nullable(in.ExpiresAt), state, actions,
+		in.ActionChannels)
 	return err
 }
 

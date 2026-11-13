@@ -39,25 +39,49 @@ const (
 	OpResend = "infra.notification.system.resend"
 )
 
-// InApp is the only channel of the first version (NT03).
+// InApp is the component's own channel, always there (NT03); the external ones are the deployment's (NT13).
 const InApp = "in_app"
 
-// Category is one entry of the catalog (be-protocol P18.3, NT03).
+// KeyChannels lists the deployment's external channels (NT13): name=component, comma separated.
+const KeyChannels = "NOTIFICATION_CHANNELS"
+
+// ChannelMembers are the channel members this component declares as optional dependencies (component.yaml): a
+// configured channel must be one of them (NT13).
+var ChannelMembers = []string{"integration/im-dingtalk"}
+
+// Channel is one external channel of the deployment: its name in the preferences and the channel member behind it.
+type Channel struct {
+	Name, Component string
+}
+
+// Category is one entry of the catalog (be-protocol P18.3, NT03): Mandatory cannot be turned off in-app; External
+// is also delivered on every configured external channel (P20.3).
 type Category struct {
 	Name      string
-	Mandatory bool // a preference cannot turn it off
+	Mandatory bool
 	DefaultOn bool
-	Channels  []string
+	External  bool
 }
 
 // Catalog is the category catalog, in its order.
 var Catalog = []Category{
-	{Name: "approval_task", DefaultOn: true, Channels: []string{InApp}},
-	{Name: "due_reminder", DefaultOn: true, Channels: []string{InApp}},
-	{Name: "security_alert", Mandatory: true, DefaultOn: true, Channels: []string{InApp}},
-	{Name: "legal_notice", Mandatory: true, DefaultOn: true, Channels: []string{InApp}},
-	{Name: "external_comm", DefaultOn: true, Channels: []string{InApp}},
-	{Name: "marketing", Channels: []string{InApp}},
+	{Name: "approval_task", DefaultOn: true, External: true},
+	{Name: "due_reminder", DefaultOn: true, External: true},
+	{Name: "security_alert", Mandatory: true, DefaultOn: true, External: true},
+	{Name: "legal_notice", Mandatory: true, DefaultOn: true},
+	{Name: "external_comm", DefaultOn: true},
+	{Name: "marketing"},
+}
+
+// Channels are a category's channels in a deployment: in-app, then the external ones when the category goes there.
+func (c Category) Channels(external []Channel) []string {
+	out := []string{InApp}
+	if c.External {
+		for _, ch := range external {
+			out = append(out, ch.Name)
+		}
+	}
+	return out
 }
 
 // CategoryOf answers a category of the catalog.
@@ -85,6 +109,12 @@ const (
 	Unresolvable  = "unresolvable"
 	// Expanded is a position recipient whose holders were found (each has its own result): it is not expanded again.
 	Expanded = "expanded"
+	// The external channels' (NT13): pending waits to be handed over; the rest are its results.
+	Pending    = "pending"
+	HandedOver = "handed_over"
+	Unmapped   = "unmapped"
+	Failed     = "failed"
+	Superseded = "superseded"
 )
 
 // Parameters.

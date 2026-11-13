@@ -36,7 +36,7 @@ type Counters struct {
 // NewCounters registers the counters on the member's registry (nil: none, the contract tests).
 func NewCounters(r prometheus.Registerer) *Counters {
 	c := &Counters{Expired: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "notification_deliveries_expired_total",
-		Help: "Deliveries dropped because their intent expired before they could be made (NT12)."}, []string{"category"})}
+		Help: "Deliveries dropped because their intent expired before they could be made (NT12)."}, []string{"category", "channel"})}
 	if r != nil {
 		_ = r.Register(c.Expired)
 	}
@@ -156,11 +156,14 @@ func deliver(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, p pending
 	}
 	cat, _ := core.CategoryOf(p.Category)
 	for _, who := range principals {
-		for _, ch := range cat.Channels {
+		for _, ch := range cat.Channels(m.Channels) {
 			if err := deliverTo(ctx, tx, p, who, ch, expired); err != nil {
 				return false, err
 			}
 		}
+	}
+	if err := queueExternal(m, ctx, tx, p); err != nil {
+		return false, err
 	}
 	if waiting {
 		return false, nil
@@ -169,7 +172,7 @@ func deliver(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, p pending
 		p.Sender, p.ID); err != nil {
 		return false, err
 	}
-	return true, publish(m, c, ctx, tx, p)
+	return true, publishSettled(m, c, ctx, tx, p.Sender, p.ID) // the external deliveries may still be pending (NT10)
 }
 
 // expand is a position's holders on its date (NT06): result Written with the holders, Unresolvable, or "" while the
@@ -204,7 +207,8 @@ func positionKey(p notify.Position, now time.Time) string {
 	return "position:" + p.LegalEntity + "/" + p.PositionID + "@" + date
 }
 
-// deliverTo makes one principal's delivery on one channel once (P18.9): a result already recorded is not made again.
+// deliverTo makes one principal's delivery on one channel once (P18.9): a row already there is not made again — a
+// result, or an external delivery pending (NT13: the external job hands it over, not this round).
 func deliverTo(ctx context.Context, tx db.Tx, p pending, who, channel string, expired bool) error {
 	var done bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM delivery WHERE sender = $1 AND intent_id = $2::uuid
@@ -216,7 +220,13 @@ func deliverTo(ctx context.Context, tx db.Tx, p pending, who, channel string, ex
 		who, p.Category, channel).Scan(&pref); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	result := Route(p.Category, prefOf(pref), expired)
+	result := Route(p.Category, channel, prefOf(pref), expired)
+	if result == core.Pending { // NT13: handed over by the external job, outside any transaction
+		_, err := tx.Exec(ctx, `INSERT INTO delivery (sender, intent_id, recipient, channel, result, delivery_id, next_at)
+			VALUES ($1, $2::uuid, $3, $4, 'pending', $5, now()) ON CONFLICT DO NOTHING`, p.Sender, p.ID, who, channel,
+			ids.New().String())
+		return err
+	}
 	if result == core.Written {
 		if _, err := tx.Exec(ctx, `INSERT INTO message (id, principal, sender, intent_id, category, title, link, template,
 				params, collapse_key) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10)`, ids.New().String(), who,
@@ -250,6 +260,24 @@ type Result struct {
 	Result    string `json:"result"`
 }
 
+// publishSettled publishes a done intent's delivery results once none of its external deliveries is pending any more
+// and it was not published yet (NT10, NT13).
+func publishSettled(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, sender, id string) error {
+	var p pending
+	var ready bool
+	err := tx.QueryRow(ctx, `SELECT category, state = 'done' AND published_at IS NULL AND NOT EXISTS (SELECT 1 FROM delivery
+			WHERE sender = $1 AND intent_id = $2::uuid AND result = 'pending')
+		FROM intent WHERE sender = $1 AND id = $2::uuid FOR UPDATE`, sender, id).Scan(&p.Category, &ready)
+	if err != nil || !ready {
+		return err
+	}
+	p.Sender, p.ID = sender, id
+	if _, err := tx.Exec(ctx, `UPDATE intent SET published_at = now() WHERE sender = $1 AND id = $2::uuid`, sender, id); err != nil {
+		return err
+	}
+	return publish(m, c, ctx, tx, p)
+}
+
 // publish emits the intent's delivery results (NT10), and counts and alerts what expired or could not be expanded
 // (NT12).
 func publish(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, p pending) error {
@@ -274,9 +302,9 @@ func publish(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, p pending
 	cat, _ := core.CategoryOf(p.Category)
 	for _, r := range results {
 		if r.Result == core.Expired && c != nil {
-			c.Expired.WithLabelValues(p.Category).Inc()
+			c.Expired.WithLabelValues(p.Category, r.Channel).Inc()
 		}
-		if cat.Mandatory && (r.Result == core.Expired || r.Result == core.Unresolvable) {
+		if cat.Mandatory && r.Channel == core.InApp && (r.Result == core.Expired || r.Result == core.Unresolvable) {
 			m.RT.Logger.Error("a notification that must be delivered was not", "event", "notification_mandatory_undelivered",
 				"sender", p.Sender, "intent", p.ID, "category", p.Category, "recipient", r.Recipient, "result", r.Result)
 		}

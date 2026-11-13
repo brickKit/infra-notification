@@ -36,6 +36,34 @@ func Parse(s string) ([]string, error) {
 	return out, nil
 }
 
+// Channels reads NOTIFICATION_CHANNELS (NT13): name=component, comma separated; empty is none. A malformed entry, a
+// name or component given twice, or the name in_app is an error (the member does not start).
+func Channels(s string) ([]core.Channel, error) {
+	out := []core.Channel{}
+	if strings.TrimSpace(s) == "" {
+		return out, nil
+	}
+	for _, e := range strings.Split(s, ",") {
+		name, comp, ok := strings.Cut(strings.TrimSpace(e), "=")
+		name, comp = strings.TrimSpace(name), strings.TrimSpace(comp)
+		switch {
+		case !ok || !channelName.MatchString(name) || !componentForm.MatchString(comp):
+			return nil, fmt.Errorf("%s: %q is not name=component", core.KeyChannels, e)
+		case name == core.InApp:
+			return nil, fmt.Errorf("%s: %s is the component's own channel", core.KeyChannels, name)
+		}
+		for _, c := range out {
+			if c.Name == name || c.Component == comp {
+				return nil, fmt.Errorf("%s: %s is given twice", core.KeyChannels, e)
+			}
+		}
+		out = append(out, core.Channel{Name: name, Component: comp})
+	}
+	return out, nil
+}
+
+var channelName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+
 // Stream is a sender's stream (be-protocol P18.2).
 func Stream(component string) string { return notify.Stream(component) }
 

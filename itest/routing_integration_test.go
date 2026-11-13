@@ -20,8 +20,9 @@ func (fx *fixture) preferences() {
 	require.Equal(t, 200, code, prefs)
 	byCat := map[string]map[string]any{}
 	for _, x := range prefs["preferences"].([]any) {
-		p := x.(map[string]any)
-		byCat[p["category"].(string)] = p
+		if p := x.(map[string]any); p["channel"] == "in_app" { // the in-app row of each category (externals: externals)
+			byCat[p["category"].(string)] = p
+		}
 	}
 	assert.Len(t, byCat, 6)
 	assert.Equal(t, true, byCat["security_alert"]["mandatory"])
