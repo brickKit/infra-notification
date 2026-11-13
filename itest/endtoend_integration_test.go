@@ -30,6 +30,7 @@ import (
 	notification "github.com/brickKit/infra-notification/v3/notification"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
+	"github.com/brickKit/be-sdk-go/v3/channelpb"
 	"github.com/brickKit/be-sdk-go/v3/component"
 	"github.com/brickKit/be-sdk-go/v3/config"
 	"github.com/brickKit/be-sdk-go/v3/db"
@@ -39,12 +40,11 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/ids"
 	"github.com/brickKit/be-sdk-go/v3/launcher"
 	"github.com/brickKit/be-sdk-go/v3/runtime"
-	"github.com/brickKit/be-sdk-go/v3/channelpb"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 const (
