@@ -41,9 +41,11 @@ func queueExternal(m *core.Base, ctx context.Context, tx db.Tx, p pending) error
 
 // The external job's parameters (NT13; protocol 10's backoff).
 const (
-	ExternalBatch   = 200
-	ExternalLease   = time.Minute // a claimed row is not claimed again meanwhile (the call is outside a transaction)
-	ExternalCall    = 10 * time.Second
+	ExternalBatch = 20
+	ExternalCall  = 10 * time.Second
+	// ExternalLease: a claimed row is not claimed again meanwhile (the call is outside a transaction); longer than the
+	// slowest run, every row of a batch taking the whole call time, so no other run calls the same row again.
+	ExternalLease   = ExternalBatch*ExternalCall + time.Minute
 	BackoffStart    = time.Minute
 	BackoffCap      = time.Hour
 	UnreachableWarn = time.Hour
@@ -110,12 +112,12 @@ func DeliverExternal(m *core.Base, c *Counters, ctx context.Context, _ *work.Run
 	}
 	down := map[string]bool{}
 	for _, e := range due {
-		result, next := core.Pending, time.Time{}
+		result, next, tried := core.Pending, time.Time{}, true
 		switch {
 		case !time.Now().Before(e.expiresAt):
 			result = core.Expired
 		case down[e.channel]:
-			next = time.Now() // the channel did not answer this run: next run
+			next, tried = time.Now(), false // the channel did not answer this run: next run, not an attempt
 		default:
 			result, next = call(m, ctx, e)
 			if result == core.Pending && next.IsZero() {
@@ -124,7 +126,7 @@ func DeliverExternal(m *core.Base, c *Counters, ctx context.Context, _ *work.Run
 			}
 		}
 		if err := m.RT.DB.BackgroundTx(ctx, func(ctx context.Context, tx db.Tx) error {
-			return settle(m, c, ctx, tx, e, result, next)
+			return settle(m, c, ctx, tx, e, result, next, tried)
 		}); err != nil {
 			return err
 		}
@@ -229,15 +231,20 @@ func backoff(attempts int) time.Duration {
 
 // settle records one external delivery's result, or when it is tried next; a long unreachable channel is alerted
 // (NT12); the intent publishes its results once its last external delivery settled (NT10).
-func settle(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, e external, result string, next time.Time) error {
+func settle(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, e external, result string, next time.Time,
+	tried bool) error {
 	if result == core.Pending {
+		n := 0
+		if tried {
+			n = 1 // a row skipped for its channel's silence this run was not tried: its backoff does not grow
+		}
 		if time.Since(e.since) > UnreachableWarn && e.attempts > 0 {
 			m.RT.Logger.Error("an external channel has not taken a delivery for an hour", "event",
 				"notification_channel_unreachable", "channel", e.channel, "sender", e.sender, "intent", e.intent)
 		}
-		_, err := tx.Exec(ctx, `UPDATE delivery SET next_at = $5, attempts = attempts + 1 WHERE sender = $1
+		_, err := tx.Exec(ctx, `UPDATE delivery SET next_at = $5, attempts = attempts + $6 WHERE sender = $1
 			AND intent_id = $2::uuid AND recipient = $3 AND channel = $4 AND result = 'pending'`, e.sender, e.intent,
-			e.recipient, e.channel, next)
+			e.recipient, e.channel, next, n)
 		return err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE delivery SET result = $5, at = now(), next_at = NULL, attempts = attempts + 1

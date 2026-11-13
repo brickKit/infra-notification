@@ -50,6 +50,7 @@ type pending struct {
 	Params                            []byte
 	Recipients                        []notify.Recipient
 	ExpiresAt                         time.Time
+	InAppOnly                         bool // P18.11: no external channel
 }
 
 // Deliver works the pending intents off, each in its own transaction (one that fails does not undo the others, and
@@ -83,7 +84,7 @@ func Deliver(m *core.Base, c *Counters, ctx context.Context, _ *work.Run) error 
 // an atomic claim).
 func claim(ctx context.Context, tx db.Tx, tried []string) ([]pending, error) {
 	rows, err := tx.Query(ctx, `SELECT sender, id::text, category, title, link, template, params, collapse_key,
-			recipients, expires_at
+			recipients, expires_at, in_app_only
 		FROM intent WHERE state = 'pending' AND NOT (sender || '/' || id::text) = ANY($1::text[])
 		ORDER BY received_at, sender, id LIMIT 1 FOR UPDATE SKIP LOCKED`, tried)
 	if err != nil {
@@ -95,7 +96,7 @@ func claim(ctx context.Context, tx db.Tx, tried []string) ([]pending, error) {
 		var p pending
 		var recipients []byte
 		if err := rows.Scan(&p.Sender, &p.ID, &p.Category, &p.Title, &p.Link, &p.Template, &p.Params, &p.CollapseKey,
-			&recipients, &p.ExpiresAt); err != nil {
+			&recipients, &p.ExpiresAt, &p.InAppOnly); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(recipients, &p.Recipients); err != nil {
@@ -155,8 +156,12 @@ func deliver(m *core.Base, c *Counters, ctx context.Context, tx db.Tx, p pending
 		}
 	}
 	cat, _ := core.CategoryOf(p.Category)
+	channels := cat.Channels(m.Channels)
+	if p.InAppOnly { // P18.11: handed to no external channel
+		channels = []string{core.InApp}
+	}
 	for _, who := range principals {
-		for _, ch := range cat.Channels(m.Channels) {
+		for _, ch := range channels {
 			if err := deliverTo(ctx, tx, p, who, ch, expired); err != nil {
 				return false, err
 			}

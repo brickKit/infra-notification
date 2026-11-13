@@ -162,12 +162,12 @@ func insert(ctx context.Context, tx db.Tx, in notify.Intent, state string) error
 		actions, _ = json.Marshal(in.Actions)
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO intent (sender, id, category, kind, recipients, title, link, template, params,
-			collapse_key, collapse_seq, occurred_at, expires_at, state, ended_at, actions, action_channels)
+			collapse_key, collapse_seq, occurred_at, expires_at, state, ended_at, actions, action_channels, in_app_only)
 		VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::timestamptz, $14,
-			CASE WHEN $14 = 'pending' THEN NULL ELSE now() END, $15, $16)`,
+			CASE WHEN $14 = 'pending' THEN NULL ELSE now() END, $15, $16, $17)`,
 		in.Sender, in.ID, in.Category, in.Kind, recipients, nullable(in.Title), nullable(in.Link), nullable(in.Template),
 		params, nullable(in.CollapseKey), nullableSeq(in), in.OccurredAt, nullable(in.ExpiresAt), state, actions,
-		in.ActionChannels)
+		in.ActionChannels, in.InAppOnly)
 	return err
 }
 

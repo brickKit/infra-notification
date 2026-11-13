@@ -141,6 +141,18 @@ func (fx *fixture) externals() {
 	assert.Equal(t, rc[0].GetDeliveryId(), rc[len(rc)-1].GetDeliveryId(), "the same delivery id on every try")
 	require.Eventually(t, func() bool { return fx.resultEvents(retry) == 1 }, 20*time.Second, 100*time.Millisecond)
 
+	// in-app only (P18.11): the flow kernel's note that a button did not take effect reaches no channel
+	note := intent("test/buy", "approval_task", principal(sectest.Bob))
+	note["in_app_only"] = true
+	fx.send("test/buy", note)
+	fx.ended("test/buy", note)
+	assert.Equal(t, []bool{false}, fx.messagesOf(fx.bob, note), "written in-app")
+	var m int
+	require.NoError(t, fx.admin.QueryRow(fx.ctx, "SELECT count(*) FROM "+itSchema+".delivery WHERE intent_id = $1 AND channel = 'dingtalk'",
+		note["intent_id"]).Scan(&m))
+	assert.Zero(t, m, "no external delivery")
+	assert.Empty(t, fx.chn.callsOf(note["intent_id"]))
+
 	// a category without external channels
 	plain := intent("test/buy", "external_comm", principal(sectest.Bob))
 	fx.send("test/buy", plain)
